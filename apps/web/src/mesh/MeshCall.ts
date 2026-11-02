@@ -25,7 +25,8 @@ export class MeshCall {
   constructor(
     private readonly signaling: Pick<SignalingClient, 'request' | 'onEvent'>,
     private readonly localStream: MediaStream | null,
-    private readonly iceServers: RTCIceServer[],
+    /** Read per connection, so a peer that joins later gets the current ICE servers. */
+    private readonly rtcConfig: () => RTCConfiguration,
   ) {
     this.unsubscribe = signaling.onEvent((event) => {
       if (event.type === 'mesh.signal') this.onSignal(event.payload.from, event.payload.signal);
@@ -113,7 +114,7 @@ export class MeshCall {
         this.remotes.set(remoteId, { participantId: remoteId, stream, state });
         this.notify();
       },
-      iceServers: this.iceServers,
+      config: this.rtcConfig(),
     });
     this.peers.set(remoteId, peer);
     this.remotes.set(remoteId, { participantId: remoteId, stream: null, state: 'new' });

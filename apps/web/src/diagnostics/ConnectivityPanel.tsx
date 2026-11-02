@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { relayOnly } from '../useCall.js';
 import { gatherCandidates, type Candidate } from './ice.js';
 
 // Lists the candidates this browser can offer with the server-provided ICE servers.
@@ -9,7 +10,9 @@ export function ConnectivityPanel({ iceServers }: { iceServers: RTCIceServer[] }
   async function run() {
     setRunning(true);
     try {
-      setResult(await gatherCandidates(iceServers));
+      setResult(
+        await gatherCandidates({ iceServers, iceTransportPolicy: relayOnly ? 'relay' : 'all' }),
+      );
     } finally {
       setRunning(false);
     }
@@ -20,7 +23,8 @@ export function ConnectivityPanel({ iceServers }: { iceServers: RTCIceServer[] }
     <details style={{ marginTop: 24 }}>
       <summary>Connectivity diagnostics</summary>
       <p style={{ fontSize: 13 }}>
-        ICE servers: {iceServers.length ? iceServers.map((s) => String(s.urls)).join(', ') : 'none'}{' '}
+        ICE servers: {iceServers.length ? iceServers.map((s) => String(s.urls)).join(', ') : 'none'}
+        {relayOnly && ' (relay only)'}{' '}
         <button disabled={running} onClick={() => void run()}>
           {running ? 'Gathering…' : 'Gather candidates'}
         </button>

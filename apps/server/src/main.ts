@@ -1,6 +1,7 @@
 import { pino } from 'pino';
 import { buildApp } from './app.js';
 import { loadConfig } from './config.js';
+import { mintTurnCredentials } from './turn/credentials.js';
 
 const SHUTDOWN_TIMEOUT_MS = 10_000;
 
@@ -11,9 +12,18 @@ const log = pino({
   base: { service: 'ts-rtc-server', env: config.NODE_ENV },
 });
 
+const turn = config.TURN_SECRET
+  ? { secret: config.TURN_SECRET, urls: config.TURN_URLS, ttlSeconds: config.TURN_TTL_SECONDS }
+  : undefined;
+if (!turn) log.warn('TURN_SECRET not set: no TURN, calls work on one machine or LAN only');
+
 const app = buildApp(log, {
   allowedOrigins: config.ALLOWED_ORIGINS,
-  iceServers: config.ICE_SERVERS,
+  // The session id is the pseudonymous userKey in TURN usernames (Stage 14: the user id).
+  iceServersFor: (userKey) => [
+    ...config.ICE_SERVERS,
+    ...(turn ? [mintTurnCredentials(turn, userKey)] : []),
+  ],
 });
 
 await app.http.listen({ host: config.HOST, port: config.PORT });

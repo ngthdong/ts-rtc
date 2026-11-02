@@ -27,6 +27,19 @@ const Env = z.object({
       }
     })
     .pipe(z.array(IceServer)),
+  TURN_SECRET: z.string().min(32).optional(),
+  TURN_URLS: z
+    .string()
+    .default(
+      'stun:127.0.0.1:3478,turn:127.0.0.1:3478?transport=udp,turn:127.0.0.1:3478?transport=tcp',
+    )
+    .transform((value) => value.split(',').map((url) => url.trim())),
+  TURN_TTL_SECONDS: z.coerce
+    .number()
+    .int()
+    .min(60)
+    .max(86_400)
+    .default(4 * 3600),
 });
 
 export type Config = z.infer<typeof Env>;

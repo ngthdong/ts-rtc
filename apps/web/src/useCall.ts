@@ -15,6 +15,9 @@ declare global {
   }
 }
 
+/** `?relay` forces every connection through TURN: the way to test TURN on one machine. */
+export const relayOnly = new URLSearchParams(window.location.search).has('relay');
+
 function signalingUrl(): string {
   const url = new URL('/ws', window.location.href);
   url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -77,7 +80,10 @@ export function useCall() {
       const media = await getLocalMedia();
       setLocal(media.stream);
       setMediaError(media.error);
-      const mesh = new MeshCall(client, media.stream, client.snapshot.iceServers);
+      const mesh = new MeshCall(client, media.stream, () => ({
+        iceServers: client.snapshot.iceServers,
+        iceTransportPolicy: relayOnly ? 'relay' : 'all',
+      }));
       const poll = setInterval(() => {
         void mesh.paths().then(setPaths);
       }, 2_000);

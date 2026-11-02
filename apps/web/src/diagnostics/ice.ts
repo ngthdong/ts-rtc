@@ -26,10 +26,10 @@ export function parseCandidate(line: string): Candidate | null {
 }
 
 export async function gatherCandidates(
-  iceServers: RTCIceServer[],
+  config: RTCConfiguration,
   timeoutMs = 10_000,
 ): Promise<{ candidates: Candidate[]; ms: number }> {
-  const pc = new RTCPeerConnection({ iceServers });
+  const pc = new RTCPeerConnection(config);
   pc.createDataChannel('probe'); // an offer needs at least one m-line to gather for
   const candidates: Candidate[] = [];
   const startedAt = performance.now();

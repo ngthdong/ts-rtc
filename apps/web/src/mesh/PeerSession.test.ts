@@ -34,7 +34,7 @@ function session(fake: ReturnType<typeof fakePeerConnection>, send = vi.fn()) {
     send,
     onChange: () => {},
     createPeerConnection: () => fake.pc as unknown as RTCPeerConnection,
-    iceServers: [],
+    config: {},
   });
   return { peer, send };
 }

@@ -27,5 +27,7 @@ jobs:
           node-version-file: .nvmrc
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - run: echo "TURN_SECRET=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
+      - run: docker compose up -d coturn
       - run: pnpm --filter @ts-rtc/e2e exec playwright install --with-deps chromium
       - run: pnpm e2e

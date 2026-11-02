@@ -18,13 +18,16 @@ test('health endpoints answer 200', async () => {
 });
 
 test('hello returns a welcome, then heartbeats are answered', async () => {
-  await start({ iceServers: [{ urls: 'stun:stun.example.org:3478' }] });
+  await start({ iceServersFor: (key) => [{ urls: 'turn:t', username: key, credential: 'c' }] });
   const client = await TestClient.connect(host);
   const welcome = await client.request('session.hello', { protocolVersions: [1] });
   expect(welcome).toMatchObject({ kind: 'res', ok: true, type: 'session.hello' });
   expect(welcome).toHaveProperty('payload.protocolVersion', 1);
   expect(welcome).toHaveProperty('payload.heartbeatIntervalMs', 10_000);
-  expect(welcome).toHaveProperty('payload.iceServers', [{ urls: 'stun:stun.example.org:3478' }]);
+  const sessionId = welcome.ok ? (welcome.payload as { sessionId: string }).sessionId : '';
+  expect(welcome).toHaveProperty('payload.iceServers', [
+    { urls: 'turn:t', username: sessionId, credential: 'c' },
+  ]);
   const ack = await client.request('session.heartbeat', {}, 'hb-1');
   expect(ack).toMatchObject({ id: 'hb-1', ok: true });
   client.close();

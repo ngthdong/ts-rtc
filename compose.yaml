@@ -1,0 +1,11 @@
+services:
+  coturn:
+    image: coturn/coturn:4.7.0
+    network_mode: host
+    volumes:
+      - ./infra/coturn/turnserver.conf:/etc/coturn/turnserver.conf:ro
+    command:
+      - -c
+      - /etc/coturn/turnserver.conf
+      - --static-auth-secret=${TURN_SECRET:?set TURN_SECRET in .env}
+    restart: unless-stopped

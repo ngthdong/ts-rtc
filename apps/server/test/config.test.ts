@@ -9,6 +9,12 @@ test('uses defaults when nothing is set', () => {
     LOG_LEVEL: 'info',
     ALLOWED_ORIGINS: ['http://localhost:5173'],
     ICE_SERVERS: [],
+    TURN_URLS: [
+      'stun:127.0.0.1:3478',
+      'turn:127.0.0.1:3478?transport=udp',
+      'turn:127.0.0.1:3478?transport=tcp',
+    ],
+    TURN_TTL_SECONDS: 14_400,
   });
 });
 
@@ -28,4 +34,9 @@ test('parses ICE_SERVERS as JSON and rejects anything else', () => {
   ]);
   expect(() => loadConfig({ ICE_SERVERS: 'stun:x' })).toThrow(/Invalid configuration/);
   expect(() => loadConfig({ ICE_SERVERS: '[{"url":"stun:x"}]' })).toThrow(/Invalid configuration/);
+});
+
+test('a TURN secret must be long enough to resist guessing', () => {
+  expect(() => loadConfig({ TURN_SECRET: 'short' })).toThrow(/Invalid configuration/);
+  expect(loadConfig({ TURN_SECRET: 'x'.repeat(32) }).TURN_SECRET).toHaveLength(32);
 });

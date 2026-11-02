@@ -1,4 +1,8 @@
+import { existsSync } from 'node:fs';
 import { defineConfig, devices } from '@playwright/test';
+
+// Same .env as the server, so the relay test knows whether coturn is configured.
+if (existsSync('../.env')) process.loadEnvFile('../.env');
 
 // Must match the server's PORT (see apps/server/src/config.ts).
 const apiPort = process.env.PORT ?? '4000';

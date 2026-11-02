@@ -15,7 +15,8 @@ export interface SignalingOptions extends SessionOptions, RoomOptions {
   // Browser origins allowed to open a WebSocket. Requests without Origin are not browsers.
   allowedOrigins: readonly string[];
   requestTimeoutMs: number;
-  iceServers: IceServer[];
+  /** ICE servers (with fresh TURN credentials) handed to each client in session.welcome. */
+  iceServersFor: (userKey: string) => IceServer[];
 }
 
 export const defaultSignalingOptions: SignalingOptions = {
@@ -27,7 +28,7 @@ export const defaultSignalingOptions: SignalingOptions = {
   capacity: 4,
   createdTtlMs: 10 * 60_000,
   emptyGraceMs: 60_000,
-  iceServers: [],
+  iceServersFor: () => [],
 };
 
 export interface Signaling {
@@ -55,7 +56,7 @@ export function attachSignaling(
         sessionId: session.id,
         protocolVersion: PROTOCOL_VERSION,
         heartbeatIntervalMs: options.pingIntervalMs,
-        iceServers: options.iceServers,
+        iceServers: options.iceServersFor(session.id),
       };
     })
     .on('session.heartbeat', () => ({ serverTime: Date.now() }));
