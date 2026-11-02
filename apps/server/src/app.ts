@@ -1,13 +1,12 @@
 import Fastify, { LogController, type FastifyBaseLogger, type FastifyInstance } from 'fastify';
-import { attachSignaling } from './signaling.js';
+import { attachSignaling, defaultSignalingOptions, type SignalingOptions } from './signaling.js';
 
 export interface App {
   http: FastifyInstance;
-  /** Stops accepting work, closes WebSockets with 1001, then the HTTP server. Idempotent. */
   close(): Promise<void>;
 }
 
-export function buildApp(log: FastifyBaseLogger): App {
+export function buildApp(log: FastifyBaseLogger, options: Partial<SignalingOptions> = {}): App {
   let ready = true;
   const http = Fastify({
     loggerInstance: log,
@@ -19,7 +18,7 @@ export function buildApp(log: FastifyBaseLogger): App {
     ready ? { status: 'ready' } : reply.code(503).send({ status: 'shutting_down' }),
   );
 
-  const signaling = attachSignaling(http.server, log);
+  const signaling = attachSignaling(http.server, log, { ...defaultSignalingOptions, ...options });
 
   let closed: Promise<void> | undefined;
   return {

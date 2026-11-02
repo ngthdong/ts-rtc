@@ -1,76 +1,71 @@
-import { randomUUID } from 'node:crypto';
 import type { Server } from 'node:http';
-import { DebugEchoRequest, type DebugEchoReply } from '@ts-rtc/protocol';
+import type { Duplex } from 'node:stream';
+import { CloseCode, PROTOCOL_VERSION, SignalingError } from '@ts-rtc/protocol';
 import type { FastifyBaseLogger } from 'fastify';
-import { WebSocketServer, type RawData, type WebSocket } from 'ws';
+import { WebSocketServer } from 'ws';
+import { RequestRouter } from './router.js';
+import { Session, type SessionOptions } from './session.js';
 
 export const WS_PATH = '/ws';
 export const MAX_PAYLOAD_BYTES = 64 * 1024;
 
-/** WebSocket close codes used by the server (RFC 6455 section 7.4.1). */
-export const CloseCode = {
-  GoingAway: 1001,
-  UnsupportedData: 1003,
-  InvalidPayload: 1007,
-  // 1009 (message too big) is sent by `ws` itself when maxPayload is exceeded.
-} as const;
+export interface SignalingOptions extends SessionOptions {
+  // Browser origins allowed to open a WebSocket. Requests without Origin are not browsers.
+  allowedOrigins: readonly string[];
+  requestTimeoutMs: number;
+}
+
+export const defaultSignalingOptions: SignalingOptions = {
+  allowedOrigins: ['http://localhost:5173'],
+  helloTimeoutMs: 5_000,
+  pingIntervalMs: 10_000,
+  requestTimeoutMs: 10_000,
+  maxBufferedBytes: 1024 * 1024,
+};
 
 export interface Signaling {
   close(): Promise<void>;
 }
 
-/** Accepts WebSocket upgrades on WS_PATH only and answers debug.echo (Stage 1). */
-export function attachSignaling(server: Server, log: FastifyBaseLogger): Signaling {
+export function attachSignaling(
+  server: Server,
+  log: FastifyBaseLogger,
+  options: SignalingOptions,
+): Signaling {
   const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_PAYLOAD_BYTES });
+  const router = new RequestRouter(options.requestTimeoutMs)
+    .on('session.hello', (payload, { session }) => {
+      if (session.greeted) throw new SignalingError('INVALID_STATE', 'already greeted');
+      if (!payload.protocolVersions.includes(PROTOCOL_VERSION)) {
+        throw new SignalingError(
+          'UNSUPPORTED_VERSION',
+          `server speaks protocol v${PROTOCOL_VERSION}`,
+          CloseCode.UnsupportedVersion,
+        );
+      }
+      session.greeted = true;
+      return {
+        sessionId: session.id,
+        protocolVersion: PROTOCOL_VERSION,
+        heartbeatIntervalMs: options.pingIntervalMs,
+      };
+    })
+    .on('session.heartbeat', () => ({ serverTime: Date.now() }));
   let closing = false;
 
   server.on('upgrade', (req, socket, head) => {
     const { pathname } = new URL(req.url ?? '/', 'http://localhost');
-    if (pathname !== WS_PATH || closing) {
-      socket.end(`HTTP/1.1 ${closing ? '503 Service Unavailable' : '404 Not Found'}\r\n\r\n`);
-      return;
+    const origin = req.headers.origin;
+    if (pathname !== WS_PATH) return reject(socket, '404 Not Found');
+    if (closing) return reject(socket, '503 Service Unavailable');
+    if (origin !== undefined && !options.allowedOrigins.includes(origin)) {
+      log.warn({ origin }, 'ws.origin_rejected');
+      return reject(socket, '403 Forbidden');
     }
     wss.handleUpgrade(req, socket, head, (ws) => {
-      onConnection(ws);
+      new Session(ws, log, router, options);
     });
   });
-
-  function onConnection(ws: WebSocket): void {
-    const sessionId = randomUUID();
-    const sessionLog = log.child({ sessionId });
-    sessionLog.info('ws.open');
-
-    ws.on('message', (data, isBinary) => {
-      if (isBinary) {
-        ws.close(CloseCode.UnsupportedData, 'binary frames are not supported');
-        return;
-      }
-      let json: unknown;
-      try {
-        json = JSON.parse(toText(data));
-      } catch {
-        ws.close(CloseCode.InvalidPayload, 'invalid JSON');
-        return;
-      }
-      const request = DebugEchoRequest.safeParse(json);
-      if (!request.success) {
-        ws.close(CloseCode.InvalidPayload, 'invalid message');
-        return;
-      }
-      const reply: DebugEchoReply = {
-        type: 'debug.echo',
-        payload: request.data.payload,
-        sessionId,
-      };
-      ws.send(JSON.stringify(reply));
-    });
-    ws.on('close', (code) => {
-      sessionLog.info({ code }, 'ws.close');
-    });
-    ws.on('error', (err) => {
-      sessionLog.warn({ err }, 'ws.error');
-    });
-  }
 
   return {
     async close() {
@@ -98,8 +93,6 @@ export function attachSignaling(server: Server, log: FastifyBaseLogger): Signali
   };
 }
 
-function toText(data: RawData): string {
-  if (Array.isArray(data)) return Buffer.concat(data).toString('utf8');
-  if (data instanceof ArrayBuffer) return Buffer.from(data).toString('utf8');
-  return data.toString('utf8');
+function reject(socket: Duplex, status: string): void {
+  socket.end(`HTTP/1.1 ${status}\r\n\r\n`);
 }

@@ -5,11 +5,13 @@ import { loadConfig } from './config.js';
 const SHUTDOWN_TIMEOUT_MS = 10_000;
 
 const config = loadConfig();
+
 const log = pino({
   level: config.LOG_LEVEL,
   base: { service: 'ts-rtc-server', env: config.NODE_ENV },
 });
-const app = buildApp(log);
+
+const app = buildApp(log, { allowedOrigins: config.ALLOWED_ORIGINS });
 
 await app.http.listen({ host: config.HOST, port: config.PORT });
 log.info({ host: config.HOST, port: config.PORT }, 'server.listening');
