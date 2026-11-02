@@ -1,11 +1,11 @@
-import { useState, type FormEvent } from 'react';
+import { useState, type SubmitEvent } from 'react';
 import { useSignaling } from './useSignaling.js';
 
 export function App() {
   const { status, closeCode, lastReply, sendEcho } = useSignaling();
   const [text, setText] = useState('hello');
 
-  function onSubmit(event: FormEvent) {
+  function onSubmit(event: SubmitEvent<HTMLFormElement>) {
     event.preventDefault();
     sendEcho(text);
   }
