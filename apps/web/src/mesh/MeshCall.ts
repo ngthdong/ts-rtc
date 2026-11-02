@@ -1,6 +1,7 @@
 import type { MeshSignal, RoomSnapshot } from '@ts-rtc/protocol';
 import type { SignalingClient } from '../signaling/SignalingClient.js';
 import { PeerSession } from './PeerSession.js';
+import { selectedPath, type SelectedPath } from '../diagnostics/ice.js';
 
 export interface RemotePeer {
   participantId: string;
@@ -24,11 +25,18 @@ export class MeshCall {
   constructor(
     private readonly signaling: Pick<SignalingClient, 'request' | 'onEvent'>,
     private readonly localStream: MediaStream | null,
+    private readonly iceServers: RTCIceServer[],
   ) {
     this.unsubscribe = signaling.onEvent((event) => {
       if (event.type === 'mesh.signal') this.onSignal(event.payload.from, event.payload.signal);
       if (event.type === 'participant.left') this.hangUp(event.payload.participantId);
     });
+  }
+
+  async paths(): Promise<Record<string, SelectedPath | null>> {
+    const result: Record<string, SelectedPath | null> = {};
+    for (const [id, peer] of this.peers) result[id] = selectedPath(await peer.pc.getStats());
+    return result;
   }
 
   get view(): RemotePeer[] {
@@ -105,6 +113,7 @@ export class MeshCall {
         this.remotes.set(remoteId, { participantId: remoteId, stream, state });
         this.notify();
       },
+      iceServers: this.iceServers,
     });
     this.peers.set(remoteId, peer);
     this.remotes.set(remoteId, { participantId: remoteId, stream: null, state: 'new' });

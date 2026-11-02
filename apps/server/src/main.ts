@@ -11,7 +11,10 @@ const log = pino({
   base: { service: 'ts-rtc-server', env: config.NODE_ENV },
 });
 
-const app = buildApp(log, { allowedOrigins: config.ALLOWED_ORIGINS });
+const app = buildApp(log, {
+  allowedOrigins: config.ALLOWED_ORIGINS,
+  iceServers: config.ICE_SERVERS,
+});
 
 await app.http.listen({ host: config.HOST, port: config.PORT });
 log.info({ host: config.HOST, port: config.PORT }, 'server.listening');

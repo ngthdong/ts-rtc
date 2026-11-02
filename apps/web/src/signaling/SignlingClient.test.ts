@@ -26,7 +26,12 @@ class FakeSocket {
   }
 }
 
-const welcome = { sessionId: 's-1', protocolVersion: 1, heartbeatIntervalMs: 10_000 };
+const welcome = {
+  sessionId: 's-1',
+  protocolVersion: 1,
+  heartbeatIntervalMs: 10_000,
+  iceServers: [],
+};
 let socket: FakeSocket;
 let client: SignalingClient;
 

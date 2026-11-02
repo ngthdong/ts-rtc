@@ -1,3 +1,4 @@
+import { IceServer } from '@ts-rtc/protocol';
 import { z } from 'zod';
 
 const Env = z.object({
@@ -14,6 +15,18 @@ const Env = z.object({
         .map((origin) => origin.trim())
         .filter(Boolean),
     ),
+  ICE_SERVERS: z
+    .string()
+    .default('[]')
+    .transform((value, ctx) => {
+      try {
+        return JSON.parse(value) as unknown;
+      } catch {
+        ctx.addIssue({ code: 'custom', message: 'must be a JSON array' });
+        return z.NEVER;
+      }
+    })
+    .pipe(z.array(IceServer)),
 });
 
 export type Config = z.infer<typeof Env>;

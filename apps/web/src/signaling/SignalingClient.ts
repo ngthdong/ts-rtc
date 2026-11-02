@@ -1,6 +1,7 @@
 import {
   ClientRequest,
   Events,
+  IceServer,
   isEventType,
   PROTOCOL_VERSION,
   Requests,
@@ -20,6 +21,7 @@ export interface SignalingSnapshot {
   closeCode: number | null;
   closeReason: string | null;
   rttMs: number | null;
+  iceServers: IceServer[];
 }
 
 export const initialSnapshot: SignalingSnapshot = {
@@ -28,6 +30,7 @@ export const initialSnapshot: SignalingSnapshot = {
   closeCode: null,
   closeReason: null,
   rttMs: null,
+  iceServers: [],
 };
 
 export interface SignalingClientOptions {
@@ -120,7 +123,8 @@ export class SignalingClient {
   private async greet(): Promise<void> {
     try {
       const welcome = await this.request('session.hello', { protocolVersions: [PROTOCOL_VERSION] });
-      this.update({ status: 'ready', sessionId: welcome.sessionId });
+      const { sessionId, iceServers } = welcome;
+      this.update({ status: 'ready', sessionId, iceServers });
       this.heartbeat = setInterval(() => {
         void this.beat();
       }, welcome.heartbeatIntervalMs);

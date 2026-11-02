@@ -1,6 +1,6 @@
 import type { Server } from 'node:http';
 import type { Duplex } from 'node:stream';
-import { CloseCode, PROTOCOL_VERSION, SignalingError } from '@ts-rtc/protocol';
+import { CloseCode, PROTOCOL_VERSION, SignalingError, type IceServer } from '@ts-rtc/protocol';
 import type { FastifyBaseLogger } from 'fastify';
 import { WebSocketServer } from 'ws';
 import { RequestRouter } from './router.js';
@@ -15,6 +15,7 @@ export interface SignalingOptions extends SessionOptions, RoomOptions {
   // Browser origins allowed to open a WebSocket. Requests without Origin are not browsers.
   allowedOrigins: readonly string[];
   requestTimeoutMs: number;
+  iceServers: IceServer[];
 }
 
 export const defaultSignalingOptions: SignalingOptions = {
@@ -26,6 +27,7 @@ export const defaultSignalingOptions: SignalingOptions = {
   capacity: 4,
   createdTtlMs: 10 * 60_000,
   emptyGraceMs: 60_000,
+  iceServers: [],
 };
 
 export interface Signaling {
@@ -53,6 +55,7 @@ export function attachSignaling(
         sessionId: session.id,
         protocolVersion: PROTOCOL_VERSION,
         heartbeatIntervalMs: options.pingIntervalMs,
+        iceServers: options.iceServers,
       };
     })
     .on('session.heartbeat', () => ({ serverTime: Date.now() }));

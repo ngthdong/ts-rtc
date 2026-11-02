@@ -4,7 +4,10 @@ type Bytes = Record<string, { audio: number; video: number }>;
 
 declare global {
   interface Window {
-    __tsRtc?: { inboundBytes(): Promise<Bytes> };
+    __tsRtc?: {
+      inboundBytes(): Promise<Bytes>;
+      paths(): Promise<Record<string, { local: string; remote: string; protocol: string } | null>>;
+    };
   }
 }
 
@@ -51,6 +54,11 @@ test('two browsers exchange audio and video, and hang up cleanly', async ({ brow
   }
   await expectMediaFlowing(alice);
   await expectMediaFlowing(bob);
+
+  const paths = await alice.evaluate(() => window.__tsRtc?.paths());
+  const path = Object.values(paths ?? {})[0];
+  expect(path).toBeTruthy();
+  test.info().annotations.push({ type: 'selected-path', description: JSON.stringify(path) });
 
   await bob.getByRole('button', { name: 'Leave' }).click();
   await expect(alice.getByTestId('remote')).toHaveCount(0);

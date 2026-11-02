@@ -3,10 +3,19 @@ import { z } from 'zod';
 export const SessionHello = z.object({
   protocolVersions: z.array(z.number().int().positive()).min(1).max(10),
 });
+
+export const IceServer = z.object({
+  urls: z.union([z.string(), z.array(z.string()).min(1)]),
+  username: z.string().optional(),
+  credential: z.string().optional(),
+});
+export type IceServer = z.infer<typeof IceServer>;
+
 export const SessionWelcome = z.object({
   sessionId: z.string(),
   protocolVersion: z.number().int().positive(),
   heartbeatIntervalMs: z.number().int().positive(),
+  iceServers: z.array(IceServer),
 });
 export const SessionHeartbeat = z.object({});
 export const SessionHeartbeatAck = z.object({ serverTime: z.number() });

@@ -7,6 +7,7 @@ export interface PeerSessionOptions {
   send(signal: MeshSignal): void;
   onChange(stream: MediaStream | null, state: RTCPeerConnectionState): void;
   createPeerConnection?: () => RTCPeerConnection;
+  iceServers: RTCIceServer[] | undefined;
 }
 
 /**
@@ -24,7 +25,8 @@ export class PeerSession {
 
   constructor(private readonly options: PeerSessionOptions) {
     const create =
-      options.createPeerConnection ?? (() => new RTCPeerConnection({ iceServers: [] }));
+      options.createPeerConnection ??
+      (() => new RTCPeerConnection({ iceServers: options.iceServers }));
     const pc = (this.pc = create());
     const { localStream } = options;
     if (localStream) {

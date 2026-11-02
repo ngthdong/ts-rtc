@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useCall } from './useCall.js';
+import { ConnectivityPanel } from './diagnostics/ConnectivityPanel.js';
+import type { SelectedPath } from './diagnostics/ice.js';
 
 function Video({ stream, muted = false }: { stream: MediaStream | null; muted?: boolean }) {
   const ref = useRef<HTMLVideoElement>(null);
@@ -17,8 +19,23 @@ function Video({ stream, muted = false }: { stream: MediaStream | null; muted?: 
   );
 }
 
+function PathInfo({ path, state }: { path: SelectedPath | null | undefined; state: string }) {
+  if (state === 'failed') {
+    return (
+      <div style={{ color: 'crimson' }}>ICE failed: no direct path. A relay (TURN) is needed.</div>
+    );
+  }
+  if (!path) return null;
+  return (
+    <div data-testid="path" style={{ fontSize: 13, color: '#555' }}>
+      {path.local} ⇄ {path.remote} over {path.protocol}
+      {path.rttMs !== null && ` · RTT ${path.rttMs} ms`}
+    </div>
+  );
+}
+
 export function App() {
-  const { connection, room, local, mediaError, remotes, join, leave } = useCall();
+  const { connection, room, local, mediaError, remotes, paths, join, leave } = useCall();
   const [name, setName] = useState('');
   const [roomId, setRoomId] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -80,6 +97,7 @@ export function App() {
               Join
             </button>
           </p>
+          <ConnectivityPanel iceServers={connection.iceServers} />
         </section>
       )}
 
@@ -105,6 +123,7 @@ export function App() {
                 <figcaption>
                   {nameOf(peer.participantId) ?? 'unknown'} ·{' '}
                   <span data-testid="peer-state">{peer.state}</span>
+                  <PathInfo path={paths[peer.participantId]} state={peer.state} />
                 </figcaption>
               </figure>
             ))}
