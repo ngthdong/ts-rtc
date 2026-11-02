@@ -20,7 +20,12 @@ export const SessionWelcome = z.object({
 export const SessionHeartbeat = z.object({});
 export const SessionHeartbeatAck = z.object({ serverTime: z.number() });
 
-export const Member = z.object({ participantId: z.string(), displayName: z.string() });
+export const MuteState = z.object({ audioMuted: z.boolean(), videoMuted: z.boolean() });
+export type MuteState = z.infer<typeof MuteState>;
+
+export const Member = z
+  .object({ participantId: z.string(), displayName: z.string() })
+  .extend(MuteState.shape);
 export type Member = z.infer<typeof Member>;
 
 export const RoomSnapshot = z.object({
@@ -69,6 +74,7 @@ export const Requests = {
   'room.join': { request: RoomJoin, response: RoomSnapshot },
   'room.leave': { request: RoomLeave, response: RoomLeft },
   'room.sync': { request: RoomSync, response: RoomSnapshot },
+  'participant.update': { request: MuteState, response: Empty },
   'mesh.signal': {
     request: z.object({ to: z.string().max(64), signal: MeshSignal }),
     response: Empty,
@@ -91,6 +97,9 @@ export const Events = {
     participantId: z.string(),
     reason: LeaveReason,
   }),
+  'participant.updated': z
+    .object({ roomSeq: z.number().int().positive(), participantId: z.string() })
+    .extend(MuteState.shape),
   'mesh.signal': z.object({ from: z.string(), signal: MeshSignal }),
 } as const;
 

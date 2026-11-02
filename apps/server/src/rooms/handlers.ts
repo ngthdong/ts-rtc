@@ -40,6 +40,13 @@ export function registerRoomHandlers(router: RequestRouter, rooms: RoomRegistry)
       const { room, participantId } = requireBinding(session);
       return room.executor.run(() => room.snapshot(participantId));
     })
+    .on('participant.update', async (state, { session }) => {
+      const { room, participantId } = requireBinding(session);
+      await room.executor.run(() => {
+        room.update(participantId, state);
+      });
+      return {};
+    })
     .on('mesh.signal', async ({ to, signal }, { session, log }) => {
       const { room, participantId } = requireBinding(session);
       const kind = 'description' in signal ? signal.description.type : 'candidate';
@@ -51,7 +58,6 @@ export function registerRoomHandlers(router: RequestRouter, rooms: RoomRegistry)
     });
 }
 
-/** Socket gone: leave the room, unless a newer binding has replaced this one (epoch check). */
 export function leaveOnDisconnect(session: Session): void {
   const binding = session.binding;
   if (!binding) return;

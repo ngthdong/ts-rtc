@@ -6,6 +6,7 @@ import {
   type EventType,
   type LeaveReason,
   type Member,
+  type MuteState,
   type RoomSnapshot,
 } from '@ts-rtc/protocol';
 import type { FastifyBaseLogger } from 'fastify';
@@ -24,7 +25,7 @@ export interface Binding {
   epoch: number;
 }
 
-interface Participant {
+interface Participant extends MuteState {
   id: string;
   displayName: string;
   epoch: number;
@@ -79,7 +80,14 @@ export class Room {
     if (this.participants.size >= this.options.capacity) {
       throw new SignalingError('CAPACITY_EXCEEDED', 'room is full');
     }
-    const participant: Participant = { id: randomUUID(), displayName, epoch: 1, peer };
+    const participant: Participant = {
+      id: randomUUID(),
+      displayName,
+      epoch: 1,
+      peer,
+      audioMuted: false,
+      videoMuted: false,
+    };
     this.participants.set(participant.id, participant);
     peer.binding = { room: this, participantId: participant.id, epoch: participant.epoch };
     if (this.state !== 'active') this.transition('active');
@@ -106,6 +114,22 @@ export class Room {
     this.broadcast('participant.left', { roomSeq, participantId, reason });
     if (this.participants.size === 0) this.transition('empty');
     return true;
+  }
+
+  /** Mute state is room state: ordered by roomSeq, sent to everyone (the sender included). */
+  update(participantId: string, state: MuteState): void {
+    const participant = this.participants.get(participantId);
+    if (!participant) throw new SignalingError('INVALID_STATE', 'not a member of this room');
+    if (
+      participant.audioMuted === state.audioMuted &&
+      participant.videoMuted === state.videoMuted
+    ) {
+      return; // nothing changed: no event
+    }
+    participant.audioMuted = state.audioMuted;
+    participant.videoMuted = state.videoMuted;
+    const roomSeq = ++this.roomSeq;
+    this.broadcast('participant.updated', { roomSeq, participantId, ...state });
   }
 
   // Forwards a WebRTC signal to one other member. The server never looks inside it.
@@ -156,6 +180,6 @@ export class Room {
   }
 }
 
-function toMember(participant: Participant): Member {
-  return { participantId: participant.id, displayName: participant.displayName };
+function toMember({ id, displayName, audioMuted, videoMuted }: Participant): Member {
+  return { participantId: id, displayName, audioMuted, videoMuted };
 }

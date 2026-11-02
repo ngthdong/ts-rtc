@@ -35,11 +35,11 @@ function PathInfo({ path, state }: { path: SelectedPath | null | undefined; stat
 }
 
 export function App() {
-  const { connection, room, local, mediaError, remotes, paths, join, leave } = useCall();
+  const { connection, room, local, muted, mediaError, remotes, paths, join, toggle, leave } =
+    useCall();
   const [name, setName] = useState('');
   const [roomId, setRoomId] = useState('');
   const [error, setError] = useState<string | null>(null);
-  const [muted, setMuted] = useState({ audio: false, video: false });
 
   function run(action: () => Promise<unknown>) {
     setError(null);
@@ -48,14 +48,7 @@ export function App() {
     });
   }
 
-  // Mute keeps the track (and the m-line) and sends silence/black frames.
-  function toggle(kind: 'audio' | 'video') {
-    const next = !muted[kind];
-    for (const track of local?.getTracks() ?? []) if (track.kind === kind) track.enabled = !next;
-    setMuted({ ...muted, [kind]: next });
-  }
-
-  const nameOf = (id: string) => room?.members.find((m) => m.participantId === id)?.displayName;
+  const member = (id: string) => room?.members.find((m) => m.participantId === id);
   const { status, closeCode, closeReason } = connection;
   return (
     <main style={{ fontFamily: 'system-ui, sans-serif', padding: 24, maxWidth: 960 }}>
@@ -105,9 +98,11 @@ export function App() {
         <section>
           <p>
             Room <code data-testid="room-id">{room.roomId}</code>{' '}
-            <button onClick={() => toggle('audio')}>{muted.audio ? 'Unmute' : 'Mute'}</button>{' '}
-            <button onClick={() => toggle('video')}>
-              {muted.video ? 'Camera on' : 'Camera off'}
+            <button onClick={() => run(() => toggle('audio'))}>
+              {muted.audioMuted ? 'Unmute' : 'Mute'}
+            </button>{' '}
+            <button onClick={() => run(() => toggle('video'))}>
+              {muted.videoMuted ? 'Camera on' : 'Camera off'}
             </button>{' '}
             <button onClick={() => run(leave)}>Leave</button>
           </p>
@@ -115,18 +110,23 @@ export function App() {
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 12 }}>
             <figure style={{ margin: 0 }}>
               <Video stream={local} muted />
-              <figcaption>{nameOf(room.participantId)} (you)</figcaption>
+              <figcaption>{member(room.participantId)?.displayName} (you)</figcaption>
             </figure>
-            {remotes.map((peer) => (
-              <figure key={peer.participantId} style={{ margin: 0 }} data-testid="remote">
-                <Video stream={peer.stream} />
-                <figcaption>
-                  {nameOf(peer.participantId) ?? 'unknown'} ·{' '}
-                  <span data-testid="peer-state">{peer.state}</span>
-                  <PathInfo path={paths[peer.participantId]} state={peer.state} />
-                </figcaption>
-              </figure>
-            ))}
+            {remotes.map((peer) => {
+              const m = member(peer.participantId);
+              return (
+                <figure key={peer.participantId} style={{ margin: 0 }} data-testid="remote">
+                  <Video stream={peer.stream} />
+                  <figcaption>
+                    {m?.displayName ?? 'unknown'}
+                    {m?.audioMuted && <span data-testid="muted"> · muted</span>}
+                    {m?.videoMuted && <span data-testid="camera-off"> · camera off</span>} ·{' '}
+                    <span data-testid="peer-state">{peer.state}</span>
+                    <PathInfo path={paths[peer.participantId]} state={peer.state} />
+                  </figcaption>
+                </figure>
+              );
+            })}
           </div>
         </section>
       )}

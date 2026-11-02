@@ -1,4 +1,4 @@
-import type { MeshSignal, RoomSnapshot } from '@ts-rtc/protocol';
+import { SignalingError, type MeshSignal, type RoomSnapshot } from '@ts-rtc/protocol';
 import type { SignalingClient } from '../signaling/SignalingClient.js';
 import { PeerSession } from './PeerSession.js';
 import { selectedPath, type SelectedPath } from '../diagnostics/ice.js';
@@ -24,7 +24,7 @@ export class MeshCall {
 
   constructor(
     private readonly signaling: Pick<SignalingClient, 'request' | 'onEvent'>,
-    private readonly localStream: MediaStream | null,
+    private readonly localStream: MediaStream,
     /** Read per connection, so a peer that joins later gets the current ICE servers. */
     private readonly rtcConfig: () => RTCConfiguration,
   ) {
@@ -67,6 +67,12 @@ export class MeshCall {
     this.listeners.clear();
   }
 
+  /** A device turned on mid-call goes to every peer; each connection renegotiates. */
+  addLocalTrack(track: MediaStreamTrack): void {
+    this.localStream.addTrack(track);
+    for (const peer of this.peers.values()) peer.addTrack(track);
+  }
+
   // Inbound RTP bytes per remote participant and kind.
   async inboundBytes(): Promise<Record<string, { audio: number; video: number }>> {
     const result: Record<string, { audio: number; video: number }> = {};
@@ -107,7 +113,10 @@ export class MeshCall {
       localStream: this.localStream,
       send: (signal) => {
         this.signaling.request('mesh.signal', { to: remoteId, signal }).catch((err: unknown) => {
-          console.warn('mesh: signal not delivered', err);
+          // NOT_FOUND: the peer left while candidates were still trickling. Expected.
+          if (!(err instanceof SignalingError && err.code === 'NOT_FOUND')) {
+            console.warn('mesh: signal not delivered', err);
+          }
         });
       },
       onChange: (stream, state) => {

@@ -3,9 +3,10 @@ import { expect, test, vi } from 'vitest';
 import type { SignalingClient } from '../signaling/SignalingClient.js';
 import { RoomClient } from './RoomClient.js';
 
-const alice = { participantId: 'a', displayName: 'Alice' };
-const bob = { participantId: 'b', displayName: 'Bob' };
-const carol = { participantId: 'c', displayName: 'Carol' };
+const unmuted = { audioMuted: false, videoMuted: false };
+const alice = { participantId: 'a', displayName: 'Alice', ...unmuted };
+const bob = { participantId: 'b', displayName: 'Bob', ...unmuted };
+const carol = { participantId: 'c', displayName: 'Carol', ...unmuted };
 const snapshot = (roomSeq: number, members = [alice]): RoomSnapshot => ({
   roomId: 'r',
   participantId: 'a',
@@ -61,4 +62,14 @@ test('participant.left removes the member', async () => {
   await room.join('r', 'Alice');
   emit({ type: 'participant.left', payload: { roomSeq: 3, participantId: 'b', reason: 'left' } });
   expect(room.view?.members).toEqual([alice]);
+});
+
+test('participant.updated changes only that member', async () => {
+  const { room, emit } = setup({ 'room.join': () => snapshot(2, [alice, bob]) });
+  await room.join('r', 'Alice');
+  emit({
+    type: 'participant.updated',
+    payload: { roomSeq: 3, participantId: 'b', audioMuted: true, videoMuted: false },
+  });
+  expect(room.view?.members).toEqual([alice, { ...bob, audioMuted: true }]);
 });

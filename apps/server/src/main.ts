@@ -19,7 +19,8 @@ if (!turn) log.warn('TURN_SECRET not set: no TURN, calls work on one machine or 
 
 const app = buildApp(log, {
   allowedOrigins: config.ALLOWED_ORIGINS,
-  // The session id is the pseudonymous userKey in TURN usernames (Stage 14: the user id).
+  capacity: config.MESH_MAX_PARTICIPANTS,
+  // The session id is the pseudonymous userKey in TURN usernames.
   iceServersFor: (userKey) => [
     ...config.ICE_SERVERS,
     ...(turn ? [mintTurnCredentials(turn, userKey)] : []),

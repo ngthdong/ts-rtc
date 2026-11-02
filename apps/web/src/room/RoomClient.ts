@@ -1,4 +1,4 @@
-import type { RoomSnapshot, SignalingEvent } from '@ts-rtc/protocol';
+import type { MuteState, RoomSnapshot, SignalingEvent } from '@ts-rtc/protocol';
 import type { SignalingClient } from '../signaling/SignalingClient.js';
 
 export class RoomClient {
@@ -44,18 +44,30 @@ export class RoomClient {
     this.set(null);
   }
 
+  async setMuted(state: MuteState): Promise<void> {
+    await this.signaling.request('participant.update', state);
+  }
+
   private apply(event: SignalingEvent): void {
-    if (event.type === 'mesh.signal') return;
+    if (event.type === 'mesh.signal') return; // media negotiation is MeshCall's business
     const view = this.current;
     if (!view || event.payload.roomSeq <= view.roomSeq) return; // already in the snapshot
     if (event.payload.roomSeq !== view.roomSeq + 1) {
       void this.resync();
       return;
     }
-    const members =
-      event.type === 'participant.joined'
-        ? [...view.members, event.payload.participant]
-        : view.members.filter((m) => m.participantId !== event.payload.participantId);
+    let members = view.members;
+    if (event.type === 'participant.joined') {
+      members = [...members, event.payload.participant];
+    } else if (event.type === 'participant.left') {
+      const gone = event.payload.participantId;
+      members = members.filter((m) => m.participantId !== gone);
+    } else {
+      const { participantId, audioMuted, videoMuted } = event.payload;
+      members = members.map((m) =>
+        m.participantId === participantId ? { ...m, audioMuted, videoMuted } : m,
+      );
+    }
     this.set({ ...view, roomSeq: event.payload.roomSeq, members });
   }
 

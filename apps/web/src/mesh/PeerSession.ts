@@ -1,9 +1,13 @@
 import type { MeshSignal } from '@ts-rtc/protocol';
 
+/** RTCPeerConnections created and not yet closed, across all calls: must return to 0. */
+let openConnections = 0;
+export const countOpenConnections = (): number => openConnections;
+
 export interface PeerSessionOptions {
   // On an offer collision the polite side rolls back its own offer and accepts the other.
   polite: boolean;
-  localStream: MediaStream | null;
+  localStream: MediaStream;
   send(signal: MeshSignal): void;
   onChange(stream: MediaStream | null, state: RTCPeerConnectionState): void;
   createPeerConnection?: () => RTCPeerConnection;
@@ -26,13 +30,14 @@ export class PeerSession {
   constructor(private readonly options: PeerSessionOptions) {
     const create = options.createPeerConnection ?? (() => new RTCPeerConnection(options.config));
     const pc = (this.pc = create());
+    openConnections += 1;
     const { localStream } = options;
-    if (localStream) {
-      for (const track of localStream.getTracks()) pc.addTrack(track, localStream);
-    } else {
-      // No camera/mic (denied or absent): still receive the other side.
-      pc.addTransceiver('audio', { direction: 'recvonly' });
-      pc.addTransceiver('video', { direction: 'recvonly' });
+    for (const track of localStream.getTracks()) pc.addTrack(track, localStream);
+    for (const kind of ['audio', 'video'] as const) {
+      // No camera or mic yet: still receive that kind. A later addTrack reuses this transceiver.
+      if (!localStream.getTracks().some((t) => t.kind === kind)) {
+        pc.addTransceiver(kind, { direction: 'recvonly' });
+      }
     }
     pc.onnegotiationneeded = () => {
       void this.offer();
@@ -60,10 +65,16 @@ export class PeerSession {
     return this.queue;
   }
 
+  /** Adding a track fires negotiationneeded; perfect negotiation does the rest. */
+  addTrack(track: MediaStreamTrack): void {
+    if (!this.closed) this.pc.addTrack(track, this.options.localStream);
+  }
+
   // Idempotent.
   close(): void {
     if (this.closed) return;
     this.closed = true;
+    openConnections -= 1;
     this.pc.close();
   }
 

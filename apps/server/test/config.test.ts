@@ -7,6 +7,7 @@ test('uses defaults when nothing is set', () => {
     HOST: '127.0.0.1',
     PORT: 4000,
     LOG_LEVEL: 'info',
+    MESH_MAX_PARTICIPANTS: 4,
     ALLOWED_ORIGINS: ['http://localhost:5173'],
     ICE_SERVERS: [],
     TURN_URLS: [

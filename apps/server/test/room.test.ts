@@ -28,13 +28,19 @@ test('two clients see each other join and leave', async () => {
   expect(await alice.waitForEvent('participant.joined')).toMatchObject({
     payload: { roomSeq: 2, participant: { participantId: b.participantId, displayName: 'Bob' } },
   });
+  await bob.ok('participant.update', { audioMuted: true, videoMuted: false });
+  for (const client of [alice, bob]) {
+    expect(await client.waitForEvent('participant.updated')).toMatchObject({
+      payload: { roomSeq: 3, participantId: b.participantId, audioMuted: true, videoMuted: false },
+    });
+  }
 
   await bob.ok('room.leave', {});
   expect(await alice.waitForEvent('participant.left')).toMatchObject({
-    payload: { roomSeq: 3, participantId: b.participantId, reason: 'left' },
+    payload: { roomSeq: 4, participantId: b.participantId, reason: 'left' },
   });
   expect(await alice.ok<RoomSnapshot>('room.sync', {})).toMatchObject({
-    roomSeq: 3,
+    roomSeq: 4,
     members: [{ participantId: a.participantId }],
   });
 });
@@ -156,12 +162,32 @@ describe('Room', () => {
       expect.objectContaining({ code: 'CAPACITY_EXCEEDED' }),
     );
   });
+
+  test('a mute change reaches everyone, the sender included; a no-op change emits nothing', () => {
+    const room = new Room(options, log, () => {});
+    const alice = new FakePeer();
+    const bob = new FakePeer();
+    const a = room.join(alice, 'Alice');
+    room.join(bob, 'Bob');
+    alice.events = [];
+    room.update(a.participantId, { audioMuted: true, videoMuted: false });
+    const updated = {
+      type: 'participant.updated',
+      payload: { roomSeq: 3, participantId: a.participantId, audioMuted: true, videoMuted: false },
+    };
+    expect(alice.events).toEqual([updated]);
+    expect(bob.events).toEqual([updated]);
+    room.update(a.participantId, { audioMuted: true, videoMuted: false });
+    expect(room.roomSeq).toBe(3);
+    expect(room.snapshot(a.participantId).members[0]).toMatchObject({ audioMuted: true });
+  });
 });
 
 describe('Room invariants', () => {
   type Op =
     | { kind: 'join' | 'leave' | 'sync'; client: number }
-    | { kind: 'disconnect'; client: number; stale: boolean };
+    | { kind: 'disconnect'; client: number; stale: boolean }
+    | { kind: 'update'; client: number; audioMuted: boolean; videoMuted: boolean };
 
   const op: fc.Arbitrary<Op> = fc.oneof(
     fc.record({
@@ -169,6 +195,12 @@ describe('Room invariants', () => {
       client: fc.nat(5),
     }),
     fc.record({ kind: fc.constant('disconnect' as const), client: fc.nat(5), stale: fc.boolean() }),
+    fc.record({
+      kind: fc.constant('update' as const),
+      client: fc.nat(5),
+      audioMuted: fc.boolean(),
+      videoMuted: fc.boolean(),
+    }),
   );
 
   test('hold for 1,000 random interleavings', () => {
@@ -198,6 +230,8 @@ describe('Room invariants', () => {
           } else if (binding && step.kind === 'leave') {
             expect(room.remove(binding.participantId, binding.epoch, 'left')).toBe(true);
             views.delete(peer);
+          } else if (binding && step.kind === 'update') {
+            room.update(binding.participantId, step);
           } else if (binding && step.kind === 'disconnect') {
             const epoch = step.stale ? binding.epoch - 1 : binding.epoch;
             const seqBefore = room.roomSeq;
@@ -215,7 +249,7 @@ describe('Room invariants', () => {
               view.roomSeq = event.payload.roomSeq;
               if (event.type === 'participant.joined') {
                 view.members.add(event.payload.participant.participantId);
-              } else {
+              } else if (event.type === 'participant.left') {
                 view.members.delete(event.payload.participantId);
               }
             }

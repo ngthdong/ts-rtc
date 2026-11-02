@@ -30,7 +30,7 @@ function fakePeerConnection() {
 function session(fake: ReturnType<typeof fakePeerConnection>, send = vi.fn()) {
   const peer = new PeerSession({
     polite: true,
-    localStream: null,
+    localStream: { getTracks: () => [] } as unknown as MediaStream,
     send,
     onChange: () => {},
     createPeerConnection: () => fake.pc as unknown as RTCPeerConnection,

@@ -21,7 +21,8 @@ export default defineConfig({
   },
   webServer: [
     {
-      command: 'pnpm --filter @ts-rtc/server dev',
+      // No watch mode: a file saved mid-run would restart the server and drop every call.
+      command: 'pnpm --filter @ts-rtc/server start',
       url: `http://127.0.0.1:${apiPort}/healthz`,
       reuseExistingServer: !process.env.CI,
     },
