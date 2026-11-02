@@ -210,6 +210,7 @@ describe('Room invariants', () => {
           // Apply events to each member's view; roomSeq must be exactly +1 each time.
           for (const [member, view] of views) {
             for (const event of member.events) {
+              if (event.type === 'mesh.signal') continue;
               expect(event.payload.roomSeq).toBe(view.roomSeq + 1);
               view.roomSeq = event.payload.roomSeq;
               if (event.type === 'participant.joined') {
@@ -235,4 +236,27 @@ describe('Room invariants', () => {
       { numRuns: 1_000 },
     );
   });
+});
+
+test('mesh.signal reaches only the addressed member, stamped with the real sender', async () => {
+  const alice = await TestClient.greeted(host);
+  const bob = await TestClient.greeted(host);
+  const mallory = await TestClient.greeted(host);
+  const roomId = await createRoom(alice);
+  const a = await alice.ok<RoomSnapshot>('room.join', { roomId, displayName: 'Alice' });
+  const b = await bob.ok<RoomSnapshot>('room.join', { roomId, displayName: 'Bob' });
+  await mallory.ok('room.join', { roomId: await createRoom(mallory), displayName: 'Mallory' });
+
+  const offer = { description: { type: 'offer', sdp: 'v=0' } };
+  await alice.ok('mesh.signal', { to: b.participantId, signal: offer, from: 'spoofed' });
+  expect(await bob.waitForEvent('mesh.signal')).toEqual({
+    type: 'mesh.signal',
+    payload: { from: a.participantId, signal: offer },
+  });
+
+  const crossRoom = await mallory.request('mesh.signal', { to: b.participantId, signal: offer });
+  expect(crossRoom).toMatchObject({ ok: false, error: { code: 'NOT_FOUND' } });
+  const huge = { description: { type: 'offer', sdp: 'x'.repeat(40_000) } };
+  const tooBig = await alice.request('mesh.signal', { to: b.participantId, signal: huge });
+  expect(tooBig).toMatchObject({ ok: false, error: { code: 'INVALID_PAYLOAD' } });
 });

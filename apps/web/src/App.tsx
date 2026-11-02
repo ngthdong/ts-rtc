@@ -1,11 +1,28 @@
-import { useState } from 'react';
-import { useSignaling } from './signaling/useSignaling.js';
+import { useEffect, useRef, useState } from 'react';
+import { useCall } from './useCall.js';
+
+function Video({ stream, muted = false }: { stream: MediaStream | null; muted?: boolean }) {
+  const ref = useRef<HTMLVideoElement>(null);
+  useEffect(() => {
+    if (ref.current) ref.current.srcObject = stream;
+  }, [stream]);
+  return (
+    <video
+      ref={ref}
+      autoPlay
+      playsInline
+      muted={muted}
+      style={{ width: '100%', aspectRatio: '16 / 9', background: '#111', borderRadius: 8 }}
+    />
+  );
+}
 
 export function App() {
-  const { connection, room, createRoom, joinRoom, leaveRoom } = useSignaling();
+  const { connection, room, local, mediaError, remotes, join, leave } = useCall();
   const [name, setName] = useState('');
   const [roomId, setRoomId] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const [muted, setMuted] = useState({ audio: false, video: false });
 
   function run(action: () => Promise<unknown>) {
     setError(null);
@@ -14,9 +31,17 @@ export function App() {
     });
   }
 
+  // Mute keeps the track (and the m-line) and sends silence/black frames.
+  function toggle(kind: 'audio' | 'video') {
+    const next = !muted[kind];
+    for (const track of local?.getTracks() ?? []) if (track.kind === kind) track.enabled = !next;
+    setMuted({ ...muted, [kind]: next });
+  }
+
+  const nameOf = (id: string) => room?.members.find((m) => m.participantId === id)?.displayName;
   const { status, closeCode, closeReason } = connection;
   return (
-    <main style={{ fontFamily: 'system-ui, sans-serif', padding: 24, maxWidth: 480 }}>
+    <main style={{ fontFamily: 'system-ui, sans-serif', padding: 24, maxWidth: 960 }}>
       <h1>ts-rtc</h1>
       <p>
         Signaling: <strong data-testid="status">{status}</strong>
@@ -31,20 +56,16 @@ export function App() {
 
       {status === 'ready' && !room && (
         <section>
-          <p>
-            <input
-              aria-label="Your name"
-              placeholder="Your name"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              maxLength={40}
-            />
-          </p>
-          <p>
-            <button disabled={!name.trim()} onClick={() => run(() => createRoom(name))}>
-              Create room
-            </button>
-          </p>
+          <input
+            aria-label="Your name"
+            placeholder="Your name"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            maxLength={40}
+          />{' '}
+          <button disabled={!name.trim()} onClick={() => run(() => join(null, name))}>
+            Create room
+          </button>
           <p>
             <input
               aria-label="Room ID"
@@ -54,7 +75,7 @@ export function App() {
             />{' '}
             <button
               disabled={!name.trim() || !roomId}
-              onClick={() => run(() => joinRoom(roomId, name))}
+              onClick={() => run(() => join(roomId, name))}
             >
               Join
             </button>
@@ -65,17 +86,29 @@ export function App() {
       {room && (
         <section>
           <p>
-            Room <code data-testid="room-id">{room.roomId}</code>
+            Room <code data-testid="room-id">{room.roomId}</code>{' '}
+            <button onClick={() => toggle('audio')}>{muted.audio ? 'Unmute' : 'Mute'}</button>{' '}
+            <button onClick={() => toggle('video')}>
+              {muted.video ? 'Camera on' : 'Camera off'}
+            </button>{' '}
+            <button onClick={() => run(leave)}>Leave</button>
           </p>
-          <ul data-testid="members">
-            {room.members.map((m) => (
-              <li key={m.participantId}>
-                {m.displayName}
-                {m.participantId === room.participantId && ' (you)'}
-              </li>
+          {mediaError && <p style={{ color: 'darkorange' }}>{mediaError}</p>}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 12 }}>
+            <figure style={{ margin: 0 }}>
+              <Video stream={local} muted />
+              <figcaption>{nameOf(room.participantId)} (you)</figcaption>
+            </figure>
+            {remotes.map((peer) => (
+              <figure key={peer.participantId} style={{ margin: 0 }} data-testid="remote">
+                <Video stream={peer.stream} />
+                <figcaption>
+                  {nameOf(peer.participantId) ?? 'unknown'} ·{' '}
+                  <span data-testid="peer-state">{peer.state}</span>
+                </figcaption>
+              </figure>
             ))}
-          </ul>
-          <button onClick={() => run(leaveRoom)}>Leave</button>
+          </div>
         </section>
       )}
 

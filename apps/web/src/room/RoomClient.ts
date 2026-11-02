@@ -24,9 +24,9 @@ export class RoomClient {
     };
   }
 
-  async create(displayName: string): Promise<void> {
+  async create(): Promise<string> {
     const { roomId } = await this.signaling.request('room.create', {});
-    await this.join(roomId, displayName);
+    return roomId;
   }
 
   async join(roomId: string, displayName: string): Promise<void> {
@@ -45,6 +45,7 @@ export class RoomClient {
   }
 
   private apply(event: SignalingEvent): void {
+    if (event.type === 'mesh.signal') return;
     const view = this.current;
     if (!view || event.payload.roomSeq <= view.roomSeq) return; // already in the snapshot
     if (event.payload.roomSeq !== view.roomSeq + 1) {

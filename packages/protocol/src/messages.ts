@@ -23,8 +23,25 @@ export const RoomSnapshot = z.object({
 });
 export type RoomSnapshot = z.infer<typeof RoomSnapshot>;
 
+export const MeshSignal = z.union([
+  z.object({
+    description: z.object({ type: z.enum(['offer', 'answer']), sdp: z.string().max(32_768) }),
+  }),
+  z.object({
+    candidate: z.object({
+      candidate: z.string().max(1_024),
+      sdpMid: z.string().max(64).nullish(),
+      sdpMLineIndex: z.number().int().min(0).max(255).nullish(),
+      usernameFragment: z.string().max(256).nullish(),
+    }),
+  }),
+]);
+export type MeshSignal = z.infer<typeof MeshSignal>;
+
 export const LeaveReason = z.enum(['left', 'disconnected']);
 export type LeaveReason = z.infer<typeof LeaveReason>;
+
+export const Empty = z.object({});
 
 export const RoomCreate = z.object({});
 export const RoomCreated = z.object({ roomId: z.string() });
@@ -43,6 +60,10 @@ export const Requests = {
   'room.join': { request: RoomJoin, response: RoomSnapshot },
   'room.leave': { request: RoomLeave, response: RoomLeft },
   'room.sync': { request: RoomSync, response: RoomSnapshot },
+  'mesh.signal': {
+    request: z.object({ to: z.string().max(64), signal: MeshSignal }),
+    response: Empty,
+  },
 } as const;
 
 export type RequestType = keyof typeof Requests;
@@ -61,6 +82,7 @@ export const Events = {
     participantId: z.string(),
     reason: LeaveReason,
   }),
+  'mesh.signal': z.object({ from: z.string(), signal: MeshSignal }),
 } as const;
 
 export type EventType = keyof typeof Events;

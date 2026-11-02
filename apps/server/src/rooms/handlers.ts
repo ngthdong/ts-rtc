@@ -39,6 +39,15 @@ export function registerRoomHandlers(router: RequestRouter, rooms: RoomRegistry)
     .on('room.sync', (_payload, { session }) => {
       const { room, participantId } = requireBinding(session);
       return room.executor.run(() => room.snapshot(participantId));
+    })
+    .on('mesh.signal', async ({ to, signal }, { session, log }) => {
+      const { room, participantId } = requireBinding(session);
+      const kind = 'description' in signal ? signal.description.type : 'candidate';
+      log.debug({ participantId, to, kind }, 'mesh.signal'); // never the SDP itself
+      await room.executor.run(() => {
+        room.relay(participantId, to, signal);
+      });
+      return {};
     });
 }
 

@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import {
+  MeshSignal,
   SignalingError,
   type EventPayload,
   type EventType,
@@ -105,6 +106,18 @@ export class Room {
     this.broadcast('participant.left', { roomSeq, participantId, reason });
     if (this.participants.size === 0) this.transition('empty');
     return true;
+  }
+
+  // Forwards a WebRTC signal to one other member. The server never looks inside it.
+  relay(from: string, to: string, signal: MeshSignal): void {
+    if (!this.participants.has(from)) {
+      throw new SignalingError('INVALID_STATE', 'not a member of this room');
+    }
+    const target = this.participants.get(to);
+    if (!target || to === from) {
+      throw new SignalingError('NOT_FOUND', 'no such participant in this room');
+    }
+    target.peer.emit('mesh.signal', { from, signal });
   }
 
   snapshot(participantId: string): RoomSnapshot {
