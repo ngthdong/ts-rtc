@@ -5,5 +5,8 @@
   "exports": "./src/index.ts",
   "scripts": {
     "typecheck": "tsc"
+  },
+  "dependencies": {
+    "zod": "^4"
   }
 }
