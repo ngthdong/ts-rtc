@@ -1,5 +1,7 @@
-import { useEffect, useState } from 'react';
-import { initialSnapshot, SignalingClient, type SignalingSnapshot } from './SignalingClient.js';
+import type { RoomSnapshot } from '@ts-rtc/protocol';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { RoomClient } from '../room/RoomClient.js';
+import { initialSnapshot, SignalingClient } from './SignalingClient.js';
 
 function signalingUrl(): string {
   const url = new URL('/ws', window.location.href);
@@ -7,19 +9,39 @@ function signalingUrl(): string {
   return url.href;
 }
 
-export function useSignaling(): SignalingSnapshot {
-  const [snapshot, setSnapshot] = useState(initialSnapshot);
+export function useSignaling() {
+  const [connection, setConnection] = useState(initialSnapshot);
+  const [room, setRoom] = useState<RoomSnapshot | null>(null);
+  const roomClient = useRef<RoomClient | null>(null);
 
   useEffect(() => {
     const client = new SignalingClient(signalingUrl());
-    const unsubscribe = client.subscribe(() => {
-      setSnapshot(client.snapshot);
-    });
+    const rooms = new RoomClient(client);
+    roomClient.current = rooms;
+    const unsubscribe = [
+      client.subscribe(() => {
+        setConnection(client.snapshot);
+      }),
+      rooms.subscribe(() => {
+        setRoom(rooms.view);
+      }),
+    ];
     return () => {
-      unsubscribe();
+      for (const fn of unsubscribe) fn();
       client.close();
+      roomClient.current = null;
     };
   }, []);
 
-  return snapshot;
+  const createRoom = useCallback(
+    async (displayName: string) => roomClient.current?.create(displayName),
+    [],
+  );
+  const joinRoom = useCallback(
+    async (roomId: string, displayName: string) => roomClient.current?.join(roomId, displayName),
+    [],
+  );
+  const leaveRoom = useCallback(async () => roomClient.current?.leave(), []);
+
+  return { connection, room, createRoom, joinRoom, leaveRoom };
 }

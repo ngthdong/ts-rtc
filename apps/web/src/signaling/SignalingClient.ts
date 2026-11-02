@@ -1,5 +1,7 @@
 import {
   ClientRequest,
+  Events,
+  isEventType,
   PROTOCOL_VERSION,
   Requests,
   ServerMessage,
@@ -7,6 +9,7 @@ import {
   type RequestPayload,
   type RequestType,
   type ResponsePayload,
+  type SignalingEvent,
 } from '@ts-rtc/protocol';
 
 export type ConnectionStatus = 'connecting' | 'ready' | 'closed';
@@ -47,6 +50,8 @@ export class SignalingClient {
   private readonly requestTimeoutMs: number;
   private readonly pending = new Map<string, Pending>();
   private readonly listeners = new Set<() => void>();
+  private readonly eventListeners = new Set<(event: SignalingEvent) => void>();
+  private lastSeq = 0;
   private state = initialSnapshot;
   private nextId = 0;
   private heartbeat: ReturnType<typeof setInterval> | undefined;
@@ -77,6 +82,13 @@ export class SignalingClient {
     };
   }
 
+  onEvent(listener: (event: SignalingEvent) => void): () => void {
+    this.eventListeners.add(listener);
+    return () => {
+      this.eventListeners.delete(listener);
+    };
+  }
+
   request<T extends RequestType>(
     type: T,
     payload: RequestPayload<T>,
@@ -99,6 +111,7 @@ export class SignalingClient {
 
   close(): void {
     this.listeners.clear();
+    this.eventListeners.clear();
     this.detach();
     this.ws.close(1000);
     this.onClosed(1000, 'closed by client');
@@ -141,7 +154,10 @@ export class SignalingClient {
       return;
     }
     const message = parsed.data;
-    if (message.kind === 'evt') return;
+    if (message.kind === 'evt') {
+      this.onServerEvent(message);
+      return;
+    }
     const pending = this.pending.get(message.id);
     if (!pending) return;
     this.pending.delete(message.id);
@@ -154,6 +170,22 @@ export class SignalingClient {
     if (payload.success) pending.resolve(payload.data);
     else
       pending.reject(new SignalingError('INVALID_PAYLOAD', `malformed ${pending.type} response`));
+  }
+
+  private onServerEvent(message: Extract<ServerMessage, { kind: 'evt' }>): void {
+    // One socket delivers in order, so a gap means a server bug, not network loss.
+    if (message.seq !== this.lastSeq + 1) {
+      console.warn(`signaling: event seq jumped from ${this.lastSeq} to ${message.seq}`);
+    }
+    this.lastSeq = message.seq;
+    if (!isEventType(message.type)) return; // newer server, unknown event: ignore
+    const payload = Events[message.type].safeParse(message.payload);
+    if (!payload.success) {
+      console.warn(`signaling: dropped a malformed ${message.type} event`);
+      return;
+    }
+    const event = { type: message.type, payload: payload.data } as SignalingEvent;
+    for (const listener of this.eventListeners) listener(event);
   }
 
   private giveUp(reason: string): void {

@@ -5,11 +5,13 @@ import type { FastifyBaseLogger } from 'fastify';
 import { WebSocketServer } from 'ws';
 import { RequestRouter } from './router.js';
 import { Session, type SessionOptions } from './session.js';
+import { leaveOnDisconnect, registerRoomHandlers, RoomRegistry } from './rooms/handlers.js';
+import type { RoomOptions } from './rooms/room.js';
 
 export const WS_PATH = '/ws';
 export const MAX_PAYLOAD_BYTES = 64 * 1024;
 
-export interface SignalingOptions extends SessionOptions {
+export interface SignalingOptions extends SessionOptions, RoomOptions {
   // Browser origins allowed to open a WebSocket. Requests without Origin are not browsers.
   allowedOrigins: readonly string[];
   requestTimeoutMs: number;
@@ -21,6 +23,9 @@ export const defaultSignalingOptions: SignalingOptions = {
   pingIntervalMs: 10_000,
   requestTimeoutMs: 10_000,
   maxBufferedBytes: 1024 * 1024,
+  capacity: 4,
+  createdTtlMs: 10 * 60_000,
+  emptyGraceMs: 60_000,
 };
 
 export interface Signaling {
@@ -51,6 +56,7 @@ export function attachSignaling(
       };
     })
     .on('session.heartbeat', () => ({ serverTime: Date.now() }));
+  registerRoomHandlers(router, new RoomRegistry(options, log));
   let closing = false;
 
   server.on('upgrade', (req, socket, head) => {
@@ -63,7 +69,10 @@ export function attachSignaling(
       return reject(socket, '403 Forbidden');
     }
     wss.handleUpgrade(req, socket, head, (ws) => {
-      new Session(ws, log, router, options);
+      const session = new Session(ws, log, router, options);
+      session.onClose(() => {
+        leaveOnDisconnect(session);
+      });
     });
   });
 

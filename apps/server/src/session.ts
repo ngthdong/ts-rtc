@@ -1,7 +1,15 @@
 import { randomUUID } from 'node:crypto';
-import { ClientRequest, CloseCode, type ServerMessage } from '@ts-rtc/protocol';
+import {
+  ClientRequest,
+  CloseCode,
+  PROTOCOL_VERSION,
+  type EventPayload,
+  type EventType,
+  type ServerMessage,
+} from '@ts-rtc/protocol';
 import type { FastifyBaseLogger } from 'fastify';
 import { WebSocket, type RawData } from 'ws';
+import type { Binding, Peer } from './rooms/room.js';
 import type { Outcome, RequestRouter } from './router.js';
 
 export interface SessionOptions {
@@ -13,10 +21,13 @@ export interface SessionOptions {
 // Responses are cached per request id so a retried request is answered, not re-run.
 const RESPONSE_CACHE_SIZE = 256;
 
-export class Session {
+export class Session implements Peer {
   readonly id = randomUUID();
   readonly log: FastifyBaseLogger;
   greeted = false;
+  binding: Binding | undefined;
+  private seq = 0;
+  private readonly closeListeners: (() => void)[] = [];
   private readonly responses = new Map<string, Promise<Outcome>>();
   private readonly timers: NodeJS.Timeout[] = [];
   private awaitingPong = false;
@@ -45,6 +56,7 @@ export class Session {
     ws.on('close', (code) => {
       for (const timer of this.timers) clearTimeout(timer);
       this.log.info({ code }, 'ws.close');
+      for (const listener of this.closeListeners) listener();
     });
     ws.on('error', (err) => {
       this.log.warn({ err }, 'ws.error');
@@ -60,6 +72,15 @@ export class Session {
       return;
     }
     this.ws.send(JSON.stringify(message));
+  }
+
+  // Events carry a per-session `seq` (+1 each) so the client can detect a missed one.
+  emit<T extends EventType>(type: T, payload: EventPayload<T>): void {
+    this.send({ v: PROTOCOL_VERSION, kind: 'evt', type, seq: ++this.seq, payload });
+  }
+
+  onClose(listener: () => void): void {
+    this.closeListeners.push(listener);
   }
 
   close(code: number, reason: string): void {
