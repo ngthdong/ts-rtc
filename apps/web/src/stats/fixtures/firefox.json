@@ -1,0 +1,211 @@
+{
+  "source": "hand-written in the shape of Firefox stats (no 'transport' stat, 'selected' on the pair, no currentRoundTripTime or qualityLimitationReason); replace with a recording (docs/observability.md)",
+  "before": [
+    {
+      "id": "a1b2c3d4",
+      "timestamp": 1793637400000.0,
+      "type": "inbound-rtp",
+      "kind": "audio",
+      "mediaType": "audio",
+      "ssrc": 11,
+      "bytesReceived": 40000,
+      "packetsReceived": 500,
+      "packetsLost": 2,
+      "jitter": 0.004
+    },
+    {
+      "id": "e5f6a7b8",
+      "timestamp": 1793637400000.0,
+      "type": "inbound-rtp",
+      "kind": "video",
+      "mediaType": "video",
+      "ssrc": 22,
+      "bytesReceived": 600000,
+      "packetsReceived": 900,
+      "packetsLost": 3,
+      "jitter": 0.011,
+      "framesDecoded": 300,
+      "frameWidth": 640,
+      "frameHeight": 480,
+      "framesPerSecond": 30
+    },
+    {
+      "id": "c9d0e1f2",
+      "timestamp": 1793637400000.0,
+      "type": "outbound-rtp",
+      "kind": "audio",
+      "mediaType": "audio",
+      "ssrc": 33,
+      "bytesSent": 41000
+    },
+    {
+      "id": "a3b4c5d6",
+      "timestamp": 1793637400000.0,
+      "type": "outbound-rtp",
+      "kind": "video",
+      "mediaType": "video",
+      "ssrc": 44,
+      "bytesSent": 610000,
+      "frameWidth": 640,
+      "frameHeight": 480,
+      "framesPerSecond": 30
+    },
+    {
+      "id": "e7f8a9b0",
+      "timestamp": 1793637399700.0,
+      "type": "remote-inbound-rtp",
+      "kind": "video",
+      "mediaType": "video",
+      "ssrc": 44,
+      "packetsLost": 0,
+      "jitter": 0.003,
+      "roundTripTime": 0.042,
+      "localId": "a3b4c5d6"
+    },
+    {
+      "id": "pair-1",
+      "timestamp": 1793637400000.0,
+      "type": "candidate-pair",
+      "state": "succeeded",
+      "nominated": true,
+      "selected": true,
+      "localCandidateId": "lc-1",
+      "remoteCandidateId": "rc-1"
+    },
+    {
+      "id": "pair-2",
+      "timestamp": 1793637400000.0,
+      "type": "candidate-pair",
+      "state": "failed",
+      "nominated": false,
+      "selected": false,
+      "localCandidateId": "lc-2",
+      "remoteCandidateId": "rc-1"
+    },
+    {
+      "id": "lc-1",
+      "timestamp": 1793637400000.0,
+      "type": "local-candidate",
+      "candidateType": "srflx",
+      "protocol": "udp"
+    },
+    {
+      "id": "lc-2",
+      "timestamp": 1793637400000.0,
+      "type": "local-candidate",
+      "candidateType": "host",
+      "protocol": "udp"
+    },
+    {
+      "id": "rc-1",
+      "timestamp": 1793637400000.0,
+      "type": "remote-candidate",
+      "candidateType": "host",
+      "protocol": "udp"
+    }
+  ],
+  "after": [
+    {
+      "id": "a1b2c3d4",
+      "timestamp": 1793637402000.0,
+      "type": "inbound-rtp",
+      "kind": "audio",
+      "mediaType": "audio",
+      "ssrc": 11,
+      "bytesReceived": 50000,
+      "packetsReceived": 600,
+      "packetsLost": 3,
+      "jitter": 0.004
+    },
+    {
+      "id": "e5f6a7b8",
+      "timestamp": 1793637402000.0,
+      "type": "inbound-rtp",
+      "kind": "video",
+      "mediaType": "video",
+      "ssrc": 22,
+      "bytesReceived": 850000,
+      "packetsReceived": 1099,
+      "packetsLost": 3,
+      "jitter": 0.011,
+      "framesDecoded": 360,
+      "frameWidth": 640,
+      "frameHeight": 480,
+      "framesPerSecond": 30
+    },
+    {
+      "id": "c9d0e1f2",
+      "timestamp": 1793637402000.0,
+      "type": "outbound-rtp",
+      "kind": "audio",
+      "mediaType": "audio",
+      "ssrc": 33,
+      "bytesSent": 51000
+    },
+    {
+      "id": "a3b4c5d6",
+      "timestamp": 1793637402000.0,
+      "type": "outbound-rtp",
+      "kind": "video",
+      "mediaType": "video",
+      "ssrc": 44,
+      "bytesSent": 850000,
+      "frameWidth": 640,
+      "frameHeight": 480,
+      "framesPerSecond": 30
+    },
+    {
+      "id": "e7f8a9b0",
+      "timestamp": 1793637401700.0,
+      "type": "remote-inbound-rtp",
+      "kind": "video",
+      "mediaType": "video",
+      "ssrc": 44,
+      "packetsLost": 0,
+      "jitter": 0.003,
+      "roundTripTime": 0.042,
+      "localId": "a3b4c5d6"
+    },
+    {
+      "id": "pair-1",
+      "timestamp": 1793637402000.0,
+      "type": "candidate-pair",
+      "state": "succeeded",
+      "nominated": true,
+      "selected": true,
+      "localCandidateId": "lc-1",
+      "remoteCandidateId": "rc-1"
+    },
+    {
+      "id": "pair-2",
+      "timestamp": 1793637402000.0,
+      "type": "candidate-pair",
+      "state": "failed",
+      "nominated": false,
+      "selected": false,
+      "localCandidateId": "lc-2",
+      "remoteCandidateId": "rc-1"
+    },
+    {
+      "id": "lc-1",
+      "timestamp": 1793637402000.0,
+      "type": "local-candidate",
+      "candidateType": "srflx",
+      "protocol": "udp"
+    },
+    {
+      "id": "lc-2",
+      "timestamp": 1793637402000.0,
+      "type": "local-candidate",
+      "candidateType": "host",
+      "protocol": "udp"
+    },
+    {
+      "id": "rc-1",
+      "timestamp": 1793637402000.0,
+      "type": "remote-candidate",
+      "candidateType": "host",
+      "protocol": "udp"
+    }
+  ]
+}

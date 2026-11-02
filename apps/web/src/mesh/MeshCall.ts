@@ -1,7 +1,12 @@
-import { SignalingError, type MeshSignal, type RoomSnapshot } from '@ts-rtc/protocol';
+import {
+  SignalingError,
+  type ClientReport,
+  type MeshSignal,
+  type RoomSnapshot,
+} from '@ts-rtc/protocol';
 import type { SignalingClient } from '../signaling/SignalingClient.js';
+import { StatsCollector, toReport, type PeerQuality } from '../stats/quality.js';
 import { PeerSession } from './PeerSession.js';
-import { selectedPath, type SelectedPath } from '../diagnostics/ice.js';
 
 export interface RemotePeer {
   participantId: string;
@@ -20,6 +25,9 @@ export class MeshCall {
   private readonly peers = new Map<string, PeerSession>();
   private readonly remotes = new Map<string, RemotePeer>();
   private readonly listeners = new Set<() => void>();
+  private readonly stats = new StatsCollector();
+  /** The last sample, for the UI and tests (reading it does not disturb the deltas). */
+  latestQuality: Record<string, PeerQuality> = {};
   private readonly unsubscribe: () => void;
 
   constructor(
@@ -34,10 +42,31 @@ export class MeshCall {
     });
   }
 
-  async paths(): Promise<Record<string, SelectedPath | null>> {
-    const result: Record<string, SelectedPath | null> = {};
-    for (const [id, peer] of this.peers) result[id] = selectedPath(await peer.pc.getStats());
-    return result;
+  /** Samples every connection (call every 2 s); quality is computed against the last sample. */
+  async sampleQuality(): Promise<Record<string, PeerQuality>> {
+    const connections = new Map([...this.peers].map(([id, peer]) => [id, peer.pc]));
+    this.latestQuality = await this.stats.sample(connections);
+    return this.latestQuality;
+  }
+
+  /** Dev/test hook: the raw report of the first peer connection, to record fixtures. */
+  async rawStats(): Promise<unknown[]> {
+    const first = this.peers.values().next();
+    if (first.done) return [];
+    const stats: unknown[] = [];
+    (await first.value.pc.getStats()).forEach((stat: unknown) => stats.push(stat));
+    return stats;
+  }
+
+  /** Sends the last sample to the server log (call every 10 s). */
+  reportQuality(): void {
+    const peers = Object.entries(this.latestQuality).map(([id, q]) => toReport(id, q));
+    if (peers.length > 0) this.report({ kind: 'quality', peers });
+  }
+
+  /** Telemetry is best effort: a rate-limited or failed report is simply dropped. */
+  private report(report: ClientReport): void {
+    this.signaling.request('client.report', report).catch(() => undefined);
   }
 
   get view(): RemotePeer[] {
@@ -120,6 +149,9 @@ export class MeshCall {
         });
       },
       onChange: (stream, state) => {
+        if (this.remotes.get(remoteId)?.state !== state) {
+          this.report({ kind: 'state', peer: remoteId, state });
+        }
         this.remotes.set(remoteId, { participantId: remoteId, stream, state });
         this.notify();
       },

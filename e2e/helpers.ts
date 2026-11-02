@@ -2,11 +2,23 @@ import { expect, type Browser, type BrowserContext, type Page } from '@playwrigh
 
 type Bytes = Record<string, { audio: number; video: number }>;
 
+/** Mirrors PeerQuality in apps/web/src/stats/quality.ts. */
+export interface Quality {
+  rttMs: number | null;
+  lossPct: number | null;
+  jitterMs: number | null;
+  inKbps: number | null;
+  outKbps: number | null;
+  video: { width: number; height: number; fps: number } | null;
+  limitation: string | null;
+  path: { local: string; remote: string; protocol: string; rttMs: number | null } | null;
+}
+
 declare global {
   interface Window {
     __tsRtc?: {
       inboundBytes(): Promise<Bytes>;
-      paths(): Promise<Record<string, { local: string; remote: string; protocol: string } | null>>;
+      quality(): Record<string, Quality>;
       resources(): { openConnections: number; liveLocalTracks: number };
     };
   }
@@ -54,6 +66,10 @@ export function inboundBytes(page: Page): Promise<Bytes> {
 
 export function resources(page: Page) {
   return page.evaluate(() => window.__tsRtc?.resources());
+}
+
+export function quality(page: Page): Promise<Record<string, Quality>> {
+  return page.evaluate(() => window.__tsRtc?.quality() ?? {});
 }
 
 /** All `peers` tiles connected: the page has a working connection to every other member. */

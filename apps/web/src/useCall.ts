@@ -1,10 +1,10 @@
 import type { MuteState, RoomSnapshot } from '@ts-rtc/protocol';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { SelectedPath } from './diagnostics/ice.js';
 import { getLocalMedia, getTrack, liveLocalTracks, stopTracks } from './media/localMedia.js';
 import { MeshCall, type RemotePeer } from './mesh/MeshCall.js';
 import { countOpenConnections } from './mesh/PeerSession.js';
 import { RoomClient } from './room/RoomClient.js';
+import type { PeerQuality } from './stats/quality.js';
 import { initialSnapshot, SignalingClient } from './signaling/SignalingClient.js';
 
 declare global {
@@ -12,7 +12,10 @@ declare global {
     /** Dev/test-only hook used by the Playwright tests. */
     __tsRtc?: {
       inboundBytes(): Promise<Record<string, { audio: number; video: number }>>;
-      paths(): Promise<Record<string, SelectedPath | null>>;
+      /** The last 2 s quality sample per remote participant. */
+      quality(): Record<string, PeerQuality>;
+      /** Raw getStats() of the first peer: for recording test fixtures from any browser. */
+      rawStats(): Promise<unknown[]>;
       /** Leak check: both must be 0 after leaving, and members − 1 / ≤ 2 during a call. */
       resources(): { openConnections: number; liveLocalTracks: number };
     };
@@ -26,7 +29,8 @@ let currentMesh: MeshCall | null = null;
 if (import.meta.env.DEV) {
   window.__tsRtc = {
     inboundBytes: () => currentMesh?.inboundBytes() ?? Promise.resolve({}),
-    paths: () => currentMesh?.paths() ?? Promise.resolve({}),
+    quality: () => currentMesh?.latestQuality ?? {},
+    rawStats: () => currentMesh?.rawStats() ?? Promise.resolve([]),
     resources: () => ({
       openConnections: countOpenConnections(),
       liveLocalTracks: liveLocalTracks(),
@@ -54,7 +58,7 @@ export function useCall() {
   const [muted, setMuted] = useState<MuteState>({ audioMuted: false, videoMuted: false });
   const [mediaError, setMediaError] = useState<string | null>(null);
   const [remotes, setRemotes] = useState<RemotePeer[]>([]);
-  const [paths, setPaths] = useState<Record<string, SelectedPath | null>>({});
+  const [quality, setQuality] = useState<Record<string, PeerQuality>>({});
   const refs = useRef<{ client: SignalingClient; rooms: RoomClient } | null>(null);
   const call = useRef<{
     mesh: MeshCall;
@@ -95,7 +99,7 @@ export function useCall() {
     stopCall();
     setLocal(null);
     setRemotes([]);
-    setPaths({});
+    setQuality({});
   }, [stopCall]);
 
   /** Joins `roomId`, or a new room when it is null. Media is acquired before joining. */
@@ -111,8 +115,12 @@ export function useCall() {
         iceServers: client.snapshot.iceServers,
         iceTransportPolicy: relayOnly ? 'relay' : 'all',
       }));
+      let ticks = 0;
       const poll = setInterval(() => {
-        void mesh.paths().then(setPaths);
+        void mesh.sampleQuality().then((sample) => {
+          setQuality(sample);
+          if (++ticks % 5 === 0) mesh.reportQuality(); // every 10 s
+        });
       }, 2_000);
       call.current = { mesh, stream: media.stream, poll };
       currentMesh = mesh;
@@ -153,5 +161,5 @@ export function useCall() {
     await refs.current?.rooms.leave();
   }, [endCall]);
 
-  return { connection, room, local, muted, mediaError, remotes, paths, join, toggle, leave };
+  return { connection, room, local, muted, mediaError, remotes, quality, join, toggle, leave };
 }

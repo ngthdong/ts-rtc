@@ -1,0 +1,217 @@
+{
+  "source": "recorded: chromium 153.0.8010.12, fake devices, 1:1 call on one machine; addresses removed",
+  "before": [
+    {
+      "id": "CP82SjQ/jv_kE0Kp5jS",
+      "timestamp": 1793637419760.042,
+      "type": "candidate-pair",
+      "availableOutgoingBitrate": 2693473,
+      "bytesReceived": 239889,
+      "bytesSent": 243364,
+      "currentRoundTripTime": 0.001,
+      "localCandidateId": "I82SjQ/jv",
+      "nominated": true,
+      "packetsReceived": 761,
+      "remoteCandidateId": "IkE0Kp5jS",
+      "state": "succeeded"
+    },
+    {
+      "id": "I82SjQ/jv",
+      "timestamp": 1793637419760.042,
+      "type": "local-candidate",
+      "candidateType": "host",
+      "protocol": "udp"
+    },
+    {
+      "id": "IT01A858069791",
+      "timestamp": 1793637419760.042,
+      "type": "inbound-rtp",
+      "kind": "audio",
+      "ssrc": 858069791,
+      "jitter": 0.003,
+      "packetsLost": 0,
+      "packetsReceived": 392,
+      "bytesReceived": 23050
+    },
+    {
+      "id": "IT01V3497626914",
+      "timestamp": 1793637419760.042,
+      "type": "inbound-rtp",
+      "kind": "video",
+      "ssrc": 3497626914,
+      "jitter": 0.001,
+      "packetsLost": 0,
+      "packetsReceived": 222,
+      "bytesReceived": 181720,
+      "frameHeight": 270,
+      "frameWidth": 480,
+      "framesDecoded": 153,
+      "framesPerSecond": 20,
+      "pliCount": 0
+    },
+    {
+      "id": "IkE0Kp5jS",
+      "timestamp": 1793637419760.042,
+      "type": "remote-candidate",
+      "candidateType": "host",
+      "protocol": "udp"
+    },
+    {
+      "id": "OT01A1729406122",
+      "timestamp": 1793637419760.042,
+      "type": "outbound-rtp",
+      "kind": "audio",
+      "ssrc": 1729406122,
+      "bytesSent": 23615
+    },
+    {
+      "id": "OT01V1468917790",
+      "timestamp": 1793637419760.042,
+      "type": "outbound-rtp",
+      "kind": "video",
+      "ssrc": 1468917790,
+      "bytesSent": 184734,
+      "frameHeight": 270,
+      "frameWidth": 480,
+      "framesPerSecond": 19,
+      "pliCount": 0,
+      "qualityLimitationReason": "bandwidth"
+    },
+    {
+      "id": "RIA1729406122",
+      "timestamp": 1793637414402.171,
+      "type": "remote-inbound-rtp",
+      "kind": "audio",
+      "ssrc": 1729406122,
+      "jitter": 0.0009159999999999999,
+      "packetsLost": 0,
+      "roundTripTime": 0.001
+    },
+    {
+      "id": "RIV1468917790",
+      "timestamp": 1793637419201.103,
+      "type": "remote-inbound-rtp",
+      "kind": "video",
+      "ssrc": 1468917790,
+      "jitter": 0.0021999999999999997,
+      "packetsLost": 0,
+      "roundTripTime": 0.003372
+    },
+    {
+      "id": "T01",
+      "timestamp": 1793637419760.042,
+      "type": "transport",
+      "bytesReceived": 239889,
+      "bytesSent": 243364,
+      "packetsReceived": 761,
+      "selectedCandidatePairId": "CP82SjQ/jv_kE0Kp5jS"
+    }
+  ],
+  "after": [
+    {
+      "id": "CP82SjQ/jv_kE0Kp5jS",
+      "timestamp": 1793637421797.667,
+      "type": "candidate-pair",
+      "availableOutgoingBitrate": 2693473,
+      "bytesReceived": 325357,
+      "bytesSent": 329093,
+      "currentRoundTripTime": 0.001,
+      "localCandidateId": "I82SjQ/jv",
+      "nominated": true,
+      "packetsReceived": 982,
+      "remoteCandidateId": "IkE0Kp5jS",
+      "state": "succeeded"
+    },
+    {
+      "id": "I82SjQ/jv",
+      "timestamp": 1793637421797.667,
+      "type": "local-candidate",
+      "candidateType": "host",
+      "protocol": "udp"
+    },
+    {
+      "id": "IT01A858069791",
+      "timestamp": 1793637421797.667,
+      "type": "inbound-rtp",
+      "kind": "audio",
+      "ssrc": 858069791,
+      "jitter": 0.002,
+      "packetsLost": 0,
+      "packetsReceived": 494,
+      "bytesReceived": 29567
+    },
+    {
+      "id": "IT01V3497626914",
+      "timestamp": 1793637421797.667,
+      "type": "inbound-rtp",
+      "kind": "video",
+      "ssrc": 3497626914,
+      "jitter": 0.002,
+      "packetsLost": 0,
+      "packetsReceived": 304,
+      "bytesReceived": 252041,
+      "frameHeight": 270,
+      "frameWidth": 480,
+      "framesDecoded": 194,
+      "framesPerSecond": 20,
+      "pliCount": 0
+    },
+    {
+      "id": "IkE0Kp5jS",
+      "timestamp": 1793637421797.667,
+      "type": "remote-candidate",
+      "candidateType": "host",
+      "protocol": "udp"
+    },
+    {
+      "id": "OT01A1729406122",
+      "timestamp": 1793637421797.667,
+      "type": "outbound-rtp",
+      "kind": "audio",
+      "ssrc": 1729406122,
+      "bytesSent": 30056
+    },
+    {
+      "id": "OT01V1468917790",
+      "timestamp": 1793637421797.667,
+      "type": "outbound-rtp",
+      "kind": "video",
+      "ssrc": 1468917790,
+      "bytesSent": 255318,
+      "frameHeight": 270,
+      "frameWidth": 480,
+      "framesPerSecond": 20,
+      "pliCount": 0,
+      "qualityLimitationReason": "bandwidth"
+    },
+    {
+      "id": "RIA1729406122",
+      "timestamp": 1793637419761.836,
+      "type": "remote-inbound-rtp",
+      "kind": "audio",
+      "ssrc": 1729406122,
+      "jitter": 0.0034159999999999998,
+      "packetsLost": 0,
+      "roundTripTime": 0.001
+    },
+    {
+      "id": "RIV1468917790",
+      "timestamp": 1793637421309.007,
+      "type": "remote-inbound-rtp",
+      "kind": "video",
+      "ssrc": 1468917790,
+      "jitter": 0.0018219999999999998,
+      "packetsLost": 0,
+      "roundTripTime": 0.001282
+    },
+    {
+      "id": "T01",
+      "timestamp": 1793637421797.667,
+      "type": "transport",
+      "bytesReceived": 325357,
+      "bytesSent": 329093,
+      "packetsReceived": 982,
+      "selectedCandidatePairId": "CP82SjQ/jv_kE0Kp5jS"
+    }
+  ]
+}

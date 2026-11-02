@@ -61,8 +61,11 @@ export function selectedPath(stats: {
 }): SelectedPath | null {
   const byId = new Map<string, Stat>();
   stats.forEach((stat) => byId.set(stat.id, stat));
-  const transport = [...byId.values()].find((s) => s.type === 'transport');
-  const pair = byId.get(String(transport?.selectedCandidatePairId));
+  const all = [...byId.values()];
+  const transport = all.find((s) => s.type === 'transport');
+  const pair =
+    byId.get(String(transport?.selectedCandidatePairId)) ?? // Chromium, Safari
+    all.find((s) => s.type === 'candidate-pair' && s.selected === true); // Firefox
   if (!pair) return null;
   const local = byId.get(String(pair.localCandidateId));
   const remote = byId.get(String(pair.remoteCandidateId));

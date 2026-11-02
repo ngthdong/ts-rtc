@@ -6,6 +6,7 @@ test('uses defaults when nothing is set', () => {
     NODE_ENV: 'development',
     HOST: '127.0.0.1',
     PORT: 4000,
+    APP_VERSION: 'dev',
     LOG_LEVEL: 'info',
     MESH_MAX_PARTICIPANTS: 4,
     ALLOWED_ORIGINS: ['http://localhost:5173'],

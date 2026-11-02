@@ -6,6 +6,7 @@ import { WebSocketServer } from 'ws';
 import { RequestRouter } from './router.js';
 import { Session, type SessionOptions } from './session.js';
 import { leaveOnDisconnect, registerRoomHandlers, RoomRegistry } from './rooms/handlers.js';
+import { registerReportHandlers } from './reports.js';
 import type { RoomOptions } from './rooms/room.js';
 
 export const WS_PATH = '/ws';
@@ -61,6 +62,7 @@ export function attachSignaling(
     })
     .on('session.heartbeat', () => ({ serverTime: Date.now() }));
   registerRoomHandlers(router, new RoomRegistry(options, log));
+  registerReportHandlers(router);
   let closing = false;
 
   server.on('upgrade', (req, socket, head) => {

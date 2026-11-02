@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useCall } from './useCall.js';
 import { ConnectivityPanel } from './diagnostics/ConnectivityPanel.js';
-import type { SelectedPath } from './diagnostics/ice.js';
+import type { PeerQuality } from './stats/quality.js';
 
 function Video({ stream, muted = false }: { stream: MediaStream | null; muted?: boolean }) {
   const ref = useRef<HTMLVideoElement>(null);
@@ -19,23 +19,37 @@ function Video({ stream, muted = false }: { stream: MediaStream | null; muted?: 
   );
 }
 
-function PathInfo({ path, state }: { path: SelectedPath | null | undefined; state: string }) {
+const show = (value: number | null, unit: string, digits = 0) =>
+  value === null ? '–' : `${value.toFixed(digits)}${unit}`;
+
+/** Per-tile quality overlay: the 2 s sample for this peer connection. */
+function QualityInfo({ q, state }: { q: PeerQuality | undefined; state: string }) {
   if (state === 'failed') {
     return (
       <div style={{ color: 'crimson' }}>ICE failed: no direct path. A relay (TURN) is needed.</div>
     );
   }
-  if (!path) return null;
+  if (!q?.path) return null;
+  const { path, video, limitation } = q;
   return (
-    <div data-testid="path" style={{ fontSize: 13, color: '#555' }}>
-      {path.local} ⇄ {path.remote} over {path.protocol}
-      {path.rttMs !== null && ` · RTT ${path.rttMs} ms`}
+    <div data-testid="quality" style={{ fontSize: 13, color: '#555' }}>
+      <div data-testid="path">
+        {path.local} ⇄ {path.remote} over {path.protocol} · RTT {show(q.rttMs, ' ms')}
+      </div>
+      <div>
+        loss {show(q.lossPct, ' %', 1)} · jitter {show(q.jitterMs, ' ms')} · in{' '}
+        {show(q.inKbps, ' kbps')} · out {show(q.outKbps, ' kbps')}
+      </div>
+      <div>
+        {video ? `${video.width}×${video.height} @ ${show(video.fps, ' fps')}` : 'no video in'}
+        {limitation && limitation !== 'none' && ` · my video limited by ${limitation}`}
+      </div>
     </div>
   );
 }
 
 export function App() {
-  const { connection, room, local, muted, mediaError, remotes, paths, join, toggle, leave } =
+  const { connection, room, local, muted, mediaError, remotes, quality, join, toggle, leave } =
     useCall();
   const [name, setName] = useState('');
   const [roomId, setRoomId] = useState('');
@@ -122,7 +136,7 @@ export function App() {
                     {m?.audioMuted && <span data-testid="muted"> · muted</span>}
                     {m?.videoMuted && <span data-testid="camera-off"> · camera off</span>} ·{' '}
                     <span data-testid="peer-state">{peer.state}</span>
-                    <PathInfo path={paths[peer.participantId]} state={peer.state} />
+                    <QualityInfo q={quality[peer.participantId]} state={peer.state} />
                   </figcaption>
                 </figure>
               );

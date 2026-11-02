@@ -55,6 +55,35 @@ export type MeshSignal = z.infer<typeof MeshSignal>;
 export const LeaveReason = z.enum(['left', 'disconnected']);
 export type LeaveReason = z.infer<typeof LeaveReason>;
 
+const CandidateType = z.enum(['host', 'srflx', 'prflx', 'relay']);
+const Rate = z.number().min(0).max(1e6).nullable();
+
+/** One peer's quality over the last sampling window: derived numbers only, no addresses. */
+export const PeerQualityReport = z.object({
+  peer: z.string().max(64),
+  rttMs: Rate,
+  lossPct: z.number().min(0).max(100).nullable(),
+  jitterMs: Rate,
+  inKbps: Rate,
+  outKbps: Rate,
+  pairLocal: CandidateType.nullable(),
+  pairRemote: CandidateType.nullable(),
+  protocol: z.enum(['udp', 'tcp']).nullable(),
+  limitation: z.enum(['none', 'cpu', 'bandwidth', 'other']).nullable(),
+});
+export type PeerQualityReport = z.infer<typeof PeerQualityReport>;
+
+/** Client telemetry, rate-limited per session and written to the server log. */
+export const ClientReport = z.union([
+  z.object({ kind: z.literal('quality'), peers: z.array(PeerQualityReport).max(10) }),
+  z.object({
+    kind: z.literal('state'),
+    peer: z.string().max(64),
+    state: z.enum(['new', 'connecting', 'connected', 'disconnected', 'failed', 'closed']),
+  }),
+]);
+export type ClientReport = z.infer<typeof ClientReport>;
+
 export const Empty = z.object({});
 
 export const RoomCreate = z.object({});
@@ -75,6 +104,7 @@ export const Requests = {
   'room.leave': { request: RoomLeave, response: RoomLeft },
   'room.sync': { request: RoomSync, response: RoomSnapshot },
   'participant.update': { request: MuteState, response: Empty },
+  'client.report': { request: ClientReport, response: Empty },
   'mesh.signal': {
     request: z.object({ to: z.string().max(64), signal: MeshSignal }),
     response: Empty,

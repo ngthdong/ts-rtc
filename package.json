@@ -10,7 +10,8 @@
     "format": "prettier --write .",
     "test": "vitest run",
     "check": "pnpm typecheck && pnpm lint && prettier --check . && pnpm test",
-    "e2e": "pnpm --filter @ts-rtc/e2e test"
+    "e2e": "pnpm --filter @ts-rtc/e2e test",
+    "bench:mesh": "BENCH=1 MESH_MAX_PARTICIPANTS=6 pnpm --filter @ts-rtc/e2e exec playwright test mesh-baseline"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

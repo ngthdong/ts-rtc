@@ -1,5 +1,12 @@
 import { expect, test } from '@playwright/test';
-import { closePages, expectConnected, expectMediaFlowing, join, openApp } from './helpers.js';
+import {
+  closePages,
+  expectConnected,
+  expectMediaFlowing,
+  join,
+  openApp,
+  quality,
+} from './helpers.js';
 
 test.afterEach(closePages);
 
@@ -21,8 +28,8 @@ for (const relay of [false, true]) {
     await expectMediaFlowing(bob, 1);
 
     // Record which path the call took, so CI history shows it.
-    const paths = await alice.evaluate(() => window.__tsRtc?.paths());
-    const selected = Object.values(paths ?? {})[0];
+    await expect.poll(async () => Object.values(await quality(alice))[0]?.path).toBeTruthy();
+    const selected = Object.values(await quality(alice))[0]?.path;
     expect(selected).toBeTruthy();
     if (relay) expect(selected).toMatchObject({ local: 'relay', remote: 'relay' });
     test.info().annotations.push({ type: 'selected-path', description: JSON.stringify(selected) });

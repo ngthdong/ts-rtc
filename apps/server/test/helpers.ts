@@ -1,13 +1,17 @@
 import { once } from 'node:events';
 import type { AddressInfo } from 'node:net';
 import { ServerMessage, type SignalingEvent } from '@ts-rtc/protocol';
+import type { FastifyBaseLogger } from 'fastify';
 import { pino } from 'pino';
 import { WebSocket } from 'ws';
 import { buildApp, type App } from '../src/app.js';
 import type { SignalingOptions } from '../src/signaling.js';
 
-export async function startServer(options: Partial<SignalingOptions> = {}) {
-  const app: App = buildApp(pino({ level: 'silent' }), options);
+export async function startServer(
+  options: Partial<SignalingOptions> = {},
+  log: FastifyBaseLogger = pino({ level: 'silent' }),
+) {
+  const app: App = buildApp(log, options);
   await app.http.listen({ host: '127.0.0.1', port: 0 });
   const host = `127.0.0.1:${(app.http.server.address() as AddressInfo).port}`;
   return { app, host };

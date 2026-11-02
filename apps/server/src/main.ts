@@ -1,15 +1,16 @@
-import { pino } from 'pino';
 import { buildApp } from './app.js';
 import { loadConfig } from './config.js';
+import { createLogger } from './logger.js';
 import { mintTurnCredentials } from './turn/credentials.js';
 
 const SHUTDOWN_TIMEOUT_MS = 10_000;
 
 const config = loadConfig();
 
-const log = pino({
+const log = createLogger({
   level: config.LOG_LEVEL,
-  base: { service: 'ts-rtc-server', env: config.NODE_ENV },
+  env: config.NODE_ENV,
+  version: config.APP_VERSION,
 });
 
 const turn = config.TURN_SECRET
