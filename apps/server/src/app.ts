@@ -14,9 +14,11 @@ export function buildApp(log: FastifyBaseLogger, options: Partial<SignalingOptio
   });
 
   http.get('/healthz', () => ({ status: 'ok' }));
-  http.get('/readyz', (_req, reply) =>
-    ready ? { status: 'ready' } : reply.code(503).send({ status: 'shutting_down' }),
-  );
+  http.get('/readyz', (_req, reply) => {
+    if (!ready) return reply.code(503).send({ status: 'shutting_down' });
+    if (options.media?.healthy === false) return reply.code(503).send({ status: 'media_failing' });
+    return { status: 'ready' };
+  });
 
   const signaling = attachSignaling(http.server, log, { ...defaultSignalingOptions, ...options });
 
@@ -28,6 +30,7 @@ export function buildApp(log: FastifyBaseLogger, options: Partial<SignalingOptio
         ready = false;
         await signaling.close();
         await http.close();
+        options.media?.close(); // Workers last: rooms are gone by now
       })();
       return closed;
     },

@@ -3,6 +3,8 @@ import type { SignalingClient } from '../signaling/SignalingClient.js';
 
 export class RoomClient {
   private current: RoomSnapshot | null = null;
+  /** Why the server ended the room under us, if it did; cleared by the next join. */
+  closedReason: string | null = null;
   private held: SignalingEvent[] | null = null;
   private readonly listeners = new Set<() => void>();
 
@@ -31,6 +33,7 @@ export class RoomClient {
 
   async join(roomId: string, displayName: string): Promise<void> {
     this.held = [];
+    this.closedReason = null;
     try {
       this.set(await this.signaling.request('room.join', { roomId, displayName }));
       for (const event of this.held) this.apply(event);
@@ -50,6 +53,11 @@ export class RoomClient {
 
   private apply(event: SignalingEvent): void {
     if (event.type === 'mesh.signal') return; // media negotiation is MeshCall's business
+    if (event.type === 'room.closed') {
+      this.closedReason = event.payload.reason;
+      this.set(null);
+      return;
+    }
     const view = this.current;
     if (!view || event.payload.roomSeq <= view.roomSeq) return; // already in the snapshot
     if (event.payload.roomSeq !== view.roomSeq + 1) {

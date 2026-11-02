@@ -8,6 +8,7 @@ import { Session, type SessionOptions } from './session.js';
 import { leaveOnDisconnect, registerRoomHandlers, RoomRegistry } from './rooms/handlers.js';
 import { registerReportHandlers } from './reports.js';
 import type { RoomOptions } from './rooms/room.js';
+import type { MediaController } from './media/media-controller.js';
 
 export const WS_PATH = '/ws';
 export const MAX_PAYLOAD_BYTES = 64 * 1024;
@@ -18,6 +19,8 @@ export interface SignalingOptions extends SessionOptions, RoomOptions {
   requestTimeoutMs: number;
   /** ICE servers (with fresh TURN credentials) handed to each client in session.welcome. */
   iceServersFor: (userKey: string) => IceServer[];
+  /** The SFU. Absent: Mesh rooms only. */
+  media?: MediaController | undefined;
 }
 
 export const defaultSignalingOptions: SignalingOptions = {
@@ -61,7 +64,7 @@ export function attachSignaling(
       };
     })
     .on('session.heartbeat', () => ({ serverTime: Date.now() }));
-  registerRoomHandlers(router, new RoomRegistry(options, log));
+  registerRoomHandlers(router, new RoomRegistry(options, log, options.media));
   registerReportHandlers(router);
   let closing = false;
 

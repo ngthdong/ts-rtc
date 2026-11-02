@@ -56,6 +56,7 @@ export function useCall() {
   const [room, setRoom] = useState<RoomSnapshot | null>(null);
   const [local, setLocal] = useState<MediaStream | null>(null);
   const [muted, setMuted] = useState<MuteState>({ audioMuted: false, videoMuted: false });
+  const [closedReason, setClosedReason] = useState<string | null>(null);
   const [mediaError, setMediaError] = useState<string | null>(null);
   const [remotes, setRemotes] = useState<RemotePeer[]>([]);
   const [quality, setQuality] = useState<Record<string, PeerQuality>>({});
@@ -75,6 +76,13 @@ export function useCall() {
     currentMesh = null;
   }, []);
 
+  const endCall = useCallback(() => {
+    stopCall();
+    setLocal(null);
+    setRemotes([]);
+    setQuality({});
+  }, [stopCall]);
+
   useEffect(() => {
     const client = new SignalingClient(signalingUrl());
     const rooms = new RoomClient(client);
@@ -85,6 +93,8 @@ export function useCall() {
       }),
       rooms.subscribe(() => {
         setRoom(rooms.view);
+        setClosedReason(rooms.closedReason);
+        if (!rooms.view) endCall(); // left, or closed by the server
       }),
     ];
     return () => {
@@ -93,14 +103,7 @@ export function useCall() {
       client.close();
       refs.current = null;
     };
-  }, [stopCall]);
-
-  const endCall = useCallback(() => {
-    stopCall();
-    setLocal(null);
-    setRemotes([]);
-    setQuality({});
-  }, [stopCall]);
+  }, [stopCall, endCall]);
 
   /** Joins `roomId`, or a new room when it is null. Media is acquired before joining. */
   const join = useCallback(
@@ -129,7 +132,7 @@ export function useCall() {
       });
       try {
         await rooms.join(target, displayName);
-        if (rooms.view) mesh.start(rooms.view);
+        if (rooms.view?.mode === 'mesh') mesh.start(rooms.view); // SFU media
         const state = muteState(media.stream);
         setMuted(state);
         if (state.audioMuted || state.videoMuted) await rooms.setMuted(state);
@@ -161,5 +164,17 @@ export function useCall() {
     await refs.current?.rooms.leave();
   }, [endCall]);
 
-  return { connection, room, local, muted, mediaError, remotes, quality, join, toggle, leave };
+  return {
+    connection,
+    room,
+    closedReason,
+    local,
+    muted,
+    mediaError,
+    remotes,
+    quality,
+    join,
+    toggle,
+    leave,
+  };
 }

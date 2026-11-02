@@ -1,6 +1,8 @@
+import { availableParallelism } from 'node:os';
 import { buildApp } from './app.js';
 import { loadConfig } from './config.js';
 import { createLogger } from './logger.js';
+import { MediasoupController } from './media/mediasoup/mediasoup-controller.js';
 import { mintTurnCredentials } from './turn/credentials.js';
 
 const SHUTDOWN_TIMEOUT_MS = 10_000;
@@ -17,8 +19,23 @@ const turn = config.TURN_SECRET
   ? { secret: config.TURN_SECRET, urls: config.TURN_URLS, ttlSeconds: config.TURN_TTL_SECONDS }
   : undefined;
 if (!turn) log.warn('TURN_SECRET not set: no TURN, calls work on one machine or LAN only');
+if (config.MEDIA_LISTEN_IP === '0.0.0.0' && !config.MEDIA_ANNOUNCED_ADDRESS) {
+  log.warn('MEDIA_ANNOUNCED_ADDRESS not set: SFU candidates will not be reachable');
+}
+const media = await MediasoupController.start(
+  {
+    count: config.WORKERS ?? Math.max(1, availableParallelism() - 1),
+    listenIp: config.MEDIA_LISTEN_IP,
+    announcedAddress: config.MEDIA_ANNOUNCED_ADDRESS,
+    portBase: config.MEDIA_PORT_BASE,
+    restartDelayMs: 2_000,
+    maxRestartsPerMinute: 5,
+  },
+  log,
+);
 
 const app = buildApp(log, {
+  media,
   allowedOrigins: config.ALLOWED_ORIGINS,
   capacity: config.MESH_MAX_PARTICIPANTS,
   // The session id is the pseudonymous userKey in TURN usernames.

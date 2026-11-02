@@ -11,6 +11,8 @@ test('uses defaults when nothing is set', () => {
     MESH_MAX_PARTICIPANTS: 4,
     ALLOWED_ORIGINS: ['http://localhost:5173'],
     ICE_SERVERS: [],
+    MEDIA_LISTEN_IP: '127.0.0.1',
+    MEDIA_PORT_BASE: 40_000,
     TURN_URLS: [
       'stun:127.0.0.1:3478',
       'turn:127.0.0.1:3478?transport=udp',

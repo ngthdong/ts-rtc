@@ -24,7 +24,7 @@ function cpuMeter() {
 const mean = (values: number[]) => values.reduce((a, b) => a + b, 0) / (values.length || 1);
 
 /**
- * Mesh baseline for Stage 19 (Mesh vs SFU). Opt-in: BENCH=1; 6 participants also needs
+ * Mesh baseline for Mesh vs SFU. Opt-in: BENCH=1; 6 participants also needs
  * MESH_MAX_PARTICIPANTS=6 on the server. Numbers are per participant, averaged over 10 s.
  */
 for (const size of [2, 4, 6]) {

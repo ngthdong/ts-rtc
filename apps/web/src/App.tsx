@@ -49,8 +49,19 @@ function QualityInfo({ q, state }: { q: PeerQuality | undefined; state: string }
 }
 
 export function App() {
-  const { connection, room, local, muted, mediaError, remotes, quality, join, toggle, leave } =
-    useCall();
+  const {
+    connection,
+    room,
+    closedReason,
+    local,
+    muted,
+    mediaError,
+    remotes,
+    quality,
+    join,
+    toggle,
+    leave,
+  } = useCall();
   const [name, setName] = useState('');
   const [roomId, setRoomId] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -80,6 +91,11 @@ export function App() {
 
       {status === 'ready' && !room && (
         <section>
+          {closedReason && (
+            <p role="status" style={{ color: 'darkorange' }}>
+              The server closed the room ({closedReason}). You can create or join another one.
+            </p>
+          )}
           <input
             aria-label="Your name"
             placeholder="Your name"

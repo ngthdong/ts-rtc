@@ -1,5 +1,6 @@
-import { SignalingError } from '@ts-rtc/protocol';
+import { SignalingError, type RoomMode } from '@ts-rtc/protocol';
 import type { FastifyBaseLogger } from 'fastify';
+import type { MediaController } from '../media/media-controller.js';
 import type { RequestRouter } from '../router.js';
 import type { Session } from '../session.js';
 import { Room, type Binding, type RoomOptions } from './room.js';
@@ -10,10 +11,21 @@ export class RoomRegistry {
   constructor(
     private readonly options: RoomOptions,
     private readonly log: FastifyBaseLogger,
-  ) {}
+    /** Absent: SFU rooms cannot be joined (tests and Mesh-only setups). */
+    readonly media: MediaController | undefined,
+  ) {
+    media?.onRouterLost((roomId) => {
+      const room = this.rooms.get(roomId);
+      if (room) void room.executor.run(() => room.close('media_failure'));
+    });
+  }
 
-  create(): Room {
-    const room = new Room(this.options, this.log, (closed) => this.rooms.delete(closed.id));
+  create(mode: RoomMode): Room {
+    const onClosed = (closed: Room) => {
+      this.rooms.delete(closed.id);
+      if (closed.mode === 'sfu') this.media?.closeRouter(closed.id);
+    };
+    const room = new Room(this.options, this.log, onClosed, mode);
     this.rooms.set(room.id, room);
     return room;
   }
@@ -25,11 +37,19 @@ export class RoomRegistry {
 
 export function registerRoomHandlers(router: RequestRouter, rooms: RoomRegistry): void {
   router
-    .on('room.create', () => ({ roomId: rooms.create().id }))
+    .on('room.create', ({ mode = 'mesh' }) => ({ roomId: rooms.create(mode).id }))
     .on('room.join', ({ roomId, displayName }, { session }) => {
       const room = rooms.get(roomId);
       if (!room) throw new SignalingError('NOT_FOUND', 'room not found');
-      return room.executor.run(() => room.join(session, displayName));
+      return room.executor.run(async () => {
+        if (room.mode === 'sfu' && room.state !== 'closed' && !session.binding) {
+          if (!rooms.media) throw new SignalingError('UNAVAILABLE', 'SFU is not enabled');
+          // Inside the executor: two first joins cannot create two Routers, and the room
+          // cannot close while we wait (closing is an executor task too).
+          room.routerRtpCapabilities ??= await rooms.media.ensureRouter(room.id);
+        }
+        return room.join(session, displayName);
+      });
     })
     .on('room.leave', async (_payload, { session }) => {
       const { room, participantId, epoch } = requireBinding(session);

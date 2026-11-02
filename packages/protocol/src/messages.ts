@@ -28,12 +28,19 @@ export const Member = z
   .extend(MuteState.shape);
 export type Member = z.infer<typeof Member>;
 
+/** mesh: browsers connect to each other. sfu: every browser connects to the media server. */
+export const RoomMode = z.enum(['mesh', 'sfu']);
+export type RoomMode = z.infer<typeof RoomMode>;
+
+/** The full membership of a room as of `roomSeq`; events with a higher roomSeq follow. */
 export const RoomSnapshot = z.object({
   roomId: z.string(),
   participantId: z.string(),
   roomSeq: z.number().int().nonnegative(),
-  mode: z.literal('mesh'),
+  mode: RoomMode,
   members: z.array(Member),
+  /** SFU rooms: the Router's RTP capabilities, opaque here, loaded by mediasoup-client. */
+  routerRtpCapabilities: z.record(z.string(), z.unknown()).optional(),
 });
 export type RoomSnapshot = z.infer<typeof RoomSnapshot>;
 
@@ -86,8 +93,6 @@ export type ClientReport = z.infer<typeof ClientReport>;
 
 export const Empty = z.object({});
 
-export const RoomCreate = z.object({});
-export const RoomCreated = z.object({ roomId: z.string() });
 export const RoomJoin = z.object({
   roomId: z.string().min(1).max(64),
   displayName: z.string().trim().min(1).max(64),
@@ -99,7 +104,10 @@ export const RoomSync = z.object({});
 export const Requests = {
   'session.hello': { request: SessionHello, response: SessionWelcome },
   'session.heartbeat': { request: SessionHeartbeat, response: SessionHeartbeatAck },
-  'room.create': { request: RoomCreate, response: RoomCreated },
+  'room.create': {
+    request: z.object({ mode: RoomMode.optional() }), // default: mesh
+    response: z.object({ roomId: z.string() }),
+  },
   'room.join': { request: RoomJoin, response: RoomSnapshot },
   'room.leave': { request: RoomLeave, response: RoomLeft },
   'room.sync': { request: RoomSync, response: RoomSnapshot },
@@ -130,6 +138,8 @@ export const Events = {
   'participant.updated': z
     .object({ roomSeq: z.number().int().positive(), participantId: z.string() })
     .extend(MuteState.shape),
+  /** The room ended for everyone; members are no longer bound to it. No roomSeq: it is final. */
+  'room.closed': z.object({ reason: z.enum(['media_failure']) }),
   'mesh.signal': z.object({ from: z.string(), signal: MeshSignal }),
 } as const;
 

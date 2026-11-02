@@ -4,20 +4,21 @@
   "type": "module",
   "scripts": {
     "dev": "tsx watch --env-file-if-exists=../../.env --clear-screen=false src/main.ts",
-    "start": "tsx --env-file-if-exists=../../.env src/main.ts",
+    "start": "node --env-file-if-exists=../../.env --import tsx src/main.ts",
     "typecheck": "tsc"
   },
   "dependencies": {
     "@ts-rtc/protocol": "workspace:*",
     "fastify": "^5",
+    "mediasoup": "3.32.1",
     "pino": "^10",
+    "tsx": "^4",
     "ws": "^8",
     "zod": "^4"
   },
   "devDependencies": {
     "@types/node": "^24",
     "@types/ws": "^8",
-    "fast-check": "^4",
-    "tsx": "^4"
+    "fast-check": "^4"
   }
 }

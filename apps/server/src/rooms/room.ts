@@ -7,9 +7,11 @@ import {
   type LeaveReason,
   type Member,
   type MuteState,
+  type RoomMode,
   type RoomSnapshot,
 } from '@ts-rtc/protocol';
 import type { FastifyBaseLogger } from 'fastify';
+import type { RtpCapabilities } from '../media/media-controller.js';
 import { SerialExecutor } from './executor.js';
 
 /** What a room needs from a connection: where to send events, and its current binding. */
@@ -42,7 +44,7 @@ export type RoomState = 'created' | 'active' | 'empty' | 'closed';
 
 const TRANSITIONS: Record<RoomState, readonly RoomState[]> = {
   created: ['active', 'closed'],
-  active: ['empty'],
+  active: ['empty', 'closed'], // closed while active: only by close(), e.g. media failure
   empty: ['active', 'closed'],
   closed: [],
 };
@@ -56,6 +58,8 @@ export class Room {
   readonly executor = new SerialExecutor();
   state: RoomState = 'created';
   roomSeq = 0;
+  /** SFU rooms: set once the room's Router exists (by the join handler, in the executor). */
+  routerRtpCapabilities: RtpCapabilities | undefined;
   private readonly participants = new Map<string, Participant>();
   private readonly log: FastifyBaseLogger;
   private timer: NodeJS.Timeout | undefined;
@@ -64,6 +68,7 @@ export class Room {
     private readonly options: RoomOptions,
     log: FastifyBaseLogger,
     private readonly onClosed: (room: Room) => void,
+    readonly mode: RoomMode = 'mesh',
   ) {
     this.log = log.child({ roomId: this.id });
     this.closeAfter(options.createdTtlMs);
@@ -132,6 +137,18 @@ export class Room {
     this.broadcast('participant.updated', { roomSeq, participantId, ...state });
   }
 
+  /** Ends the room for everyone at once; members are unbound and told why. Idempotent. */
+  close(reason: 'media_failure'): void {
+    if (this.state === 'closed') return;
+    for (const participant of this.participants.values()) {
+      if (participant.peer.binding?.room === this) participant.peer.binding = undefined;
+      participant.peer.emit('room.closed', { reason });
+    }
+    this.log.warn({ reason, members: this.participants.size }, 'room.closed');
+    this.participants.clear();
+    this.transition('closed');
+  }
+
   // Forwards a WebRTC signal to one other member. The server never looks inside it.
   relay(from: string, to: string, signal: MeshSignal): void {
     if (!this.participants.has(from)) {
@@ -148,8 +165,15 @@ export class Room {
     if (!this.participants.has(participantId)) {
       throw new SignalingError('INVALID_STATE', 'not a member of this room');
     }
-    const { id: roomId, roomSeq, members } = this;
-    return { roomId, participantId, roomSeq, mode: 'mesh', members };
+    const { id: roomId, roomSeq, mode, members, routerRtpCapabilities } = this;
+    return {
+      roomId,
+      participantId,
+      roomSeq,
+      mode,
+      members,
+      ...(routerRtpCapabilities && { routerRtpCapabilities }),
+    };
   }
 
   private broadcast<T extends EventType>(type: T, payload: EventPayload<T>, except?: string): void {
