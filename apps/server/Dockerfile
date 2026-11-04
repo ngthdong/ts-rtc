@@ -24,6 +24,7 @@ WORKDIR /app
 COPY --from=deps /app ./
 COPY packages/protocol/src packages/protocol/src
 COPY apps/server/src apps/server/src
+COPY apps/server/migrations apps/server/migrations
 WORKDIR /app/apps/server
 # Behind NAT (any container network but host): also set MEDIA_ANNOUNCED_ADDRESS.
 ENV NODE_ENV=production HOST=0.0.0.0 MEDIA_LISTEN_IP=0.0.0.0

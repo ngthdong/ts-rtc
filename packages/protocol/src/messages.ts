@@ -3,6 +3,8 @@ import { ProducerInfo, SfuEvents, SfuRequests } from './sfu.js';
 
 export const SessionHello = z.object({
   protocolVersions: z.array(z.number().int().positive()).min(1).max(10),
+  /** From POST /api/auth/login. Missing or invalid: the server closes with 4401. */
+  accessToken: z.string().max(4_096).optional(),
 });
 
 export const IceServer = z.object({
@@ -98,10 +100,8 @@ export type ClientReport = z.infer<typeof ClientReport>;
 
 export const Empty = z.object({});
 
-export const RoomJoin = z.object({
-  roomId: z.string().min(1).max(64),
-  displayName: z.string().trim().min(1).max(64),
-});
+/** Rooms are created over HTTP (POST /api/rooms); the display name is the account's. */
+export const RoomJoin = z.object({ roomId: z.string().min(1).max(64) });
 export const RoomLeave = z.object({});
 export const RoomLeft = z.object({});
 export const RoomSync = z.object({});
@@ -109,10 +109,6 @@ export const RoomSync = z.object({});
 export const Requests = {
   'session.hello': { request: SessionHello, response: SessionWelcome },
   'session.heartbeat': { request: SessionHeartbeat, response: SessionHeartbeatAck },
-  'room.create': {
-    request: z.object({ mode: RoomMode.optional() }), // default: mesh
-    response: z.object({ roomId: z.string() }),
-  },
   'room.join': { request: RoomJoin, response: RoomSnapshot },
   'room.leave': { request: RoomLeave, response: RoomLeft },
   'room.sync': { request: RoomSync, response: RoomSnapshot },
@@ -145,7 +141,7 @@ export const Events = {
     .object({ roomSeq: z.number().int().positive(), participantId: z.string() })
     .extend(MuteState.shape),
   /** The room ended for everyone; members are no longer bound to it. No roomSeq: it is final. */
-  'room.closed': z.object({ reason: z.enum(['media_failure']) }),
+  'room.closed': z.object({ reason: z.enum(['media_failure', 'deleted']) }),
   'mesh.signal': z.object({ from: z.string(), signal: MeshSignal }),
   ...SfuEvents,
 } as const;

@@ -29,6 +29,8 @@ export default defineConfig({
     {
       // No watch mode: a file saved mid-run would restart the server and drop every call.
       command: 'pnpm --filter @ts-rtc/server start',
+      // Every simulated user signs up from 127.0.0.1: the per-IP auth limit would trip.
+      env: { AUTH_RATE_PER_MINUTE: '10000' },
       // SERVER_LOGS=1: print the server's JSON log lines (prefixed [WebServer]).
       stdout: process.env.SERVER_LOGS ? 'pipe' : 'ignore',
       url: `http://127.0.0.1:${apiPort}/healthz`,

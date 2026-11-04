@@ -1,6 +1,13 @@
 import { execSync } from 'node:child_process';
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
-import { closePages, expectConnected, expectMediaFlowing, openApp, quality } from './helpers.js';
+import {
+  closePages,
+  expectConnected,
+  expectMediaFlowing,
+  openApp,
+  quality,
+  signedIn,
+} from './helpers.js';
 
 test.afterEach(closePages);
 
@@ -15,7 +22,7 @@ async function live(request: APIRequestContext) {
 
 /** Joins a fresh SFU room alone, sends camera + mic to the SFU and receives them back. */
 async function loopback(page: Page) {
-  await page.getByLabel('Your name').fill('Solo');
+  await signedIn(page, 'Solo');
   await page.getByRole('button', { name: 'SFU loopback test' }).click();
   await expectConnected(page, 1);
   await expectMediaFlowing(page, 1); // audio and video bytes rising on the recv transport

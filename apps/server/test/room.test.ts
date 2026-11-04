@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import type { EventPayload, EventType, RoomSnapshot, SignalingEvent } from '@ts-rtc/protocol';
 import fc from 'fast-check';
 import { pino } from 'pino';
@@ -5,28 +6,28 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import type { App } from '../src/app.js';
 import { SerialExecutor } from '../src/rooms/executor.js';
 import { Room, type Binding, type Peer, type RoomOptions } from '../src/rooms/room.js';
-import { startServer, TestClient } from './helpers.js';
+import { startServer, TestClient, type TestDirectory } from './helpers.js';
 
 let app: App;
 let host: string;
+let directory: TestDirectory;
 beforeEach(async () => {
-  ({ app, host } = await startServer());
+  ({ app, host, directory } = await startServer());
 });
 afterEach(() => app.close());
 
-async function createRoom(client: TestClient): Promise<string> {
-  return (await client.ok<{ roomId: string }>('room.create', { mode: 'mesh' })).roomId;
-}
+/** A durable Mesh room (rooms are created over HTTP; here, straight in the directory). */
+const createRoom = () => directory.create('mesh');
 
 test('two clients see each other join and leave', async () => {
-  const alice = await TestClient.greeted(host);
-  const bob = await TestClient.greeted(host);
-  const roomId = await createRoom(alice);
-  const a = await alice.ok<RoomSnapshot>('room.join', { roomId, displayName: 'Alice' });
-  const b = await bob.ok<RoomSnapshot>('room.join', { roomId, displayName: 'Bob' });
+  const alice = await TestClient.greeted(host, 'Alice');
+  const bob = await TestClient.greeted(host, 'Bob');
+  const roomId = createRoom();
+  const a = await alice.ok<RoomSnapshot>('room.join', { roomId });
+  const b = await bob.ok<RoomSnapshot>('room.join', { roomId });
   expect(b.members.map((m) => m.displayName)).toEqual(['Alice', 'Bob']);
   expect(await alice.waitForEvent('participant.joined')).toMatchObject({
-    payload: { roomSeq: 2, participant: { participantId: b.participantId, displayName: 'Bob' } },
+    payload: { roomSeq: 2, participant: { participantId: b.participantId } },
   });
   await bob.ok('participant.update', { audioMuted: true, videoMuted: false });
   for (const client of [alice, bob]) {
@@ -46,11 +47,11 @@ test('two clients see each other join and leave', async () => {
 });
 
 test('closing the socket removes the participant with reason "disconnected"', async () => {
-  const alice = await TestClient.greeted(host);
-  const bob = await TestClient.greeted(host);
-  const roomId = await createRoom(alice);
-  await alice.ok('room.join', { roomId, displayName: 'Alice' });
-  const b = await bob.ok<RoomSnapshot>('room.join', { roomId, displayName: 'Bob' });
+  const alice = await TestClient.greeted(host, 'Alice');
+  const bob = await TestClient.greeted(host, 'Bob');
+  const roomId = createRoom();
+  await alice.ok('room.join', { roomId });
+  const b = await bob.ok<RoomSnapshot>('room.join', { roomId });
   bob.close();
   expect(await alice.waitForEvent('participant.left')).toMatchObject({
     payload: { participantId: b.participantId, reason: 'disconnected' },
@@ -58,12 +59,9 @@ test('closing the socket removes the participant with reason "disconnected"', as
 });
 
 test('6 concurrent joins into a room of 4: exactly 4 succeed', async () => {
-  const owner = await TestClient.greeted(host);
-  const roomId = await createRoom(owner);
+  const roomId = createRoom();
   const clients = await Promise.all(Array.from({ length: 6 }, () => TestClient.greeted(host)));
-  const replies = await Promise.all(
-    clients.map((c, i) => c.request('room.join', { roomId, displayName: `p${i}` })),
-  );
+  const replies = await Promise.all(clients.map((c) => c.request('room.join', { roomId })));
   expect(replies.filter((r) => r.ok)).toHaveLength(4);
   const rejected = replies.filter((r) => !r.ok);
   expect(rejected).toHaveLength(2);
@@ -72,14 +70,14 @@ test('6 concurrent joins into a room of 4: exactly 4 succeed', async () => {
 
 test('join rules: idempotent, one room at a time, unknown rooms, leave needs a room', async () => {
   const client = await TestClient.greeted(host);
-  const roomId = await createRoom(client);
-  const otherRoomId = await createRoom(client);
-  const first = await client.ok<RoomSnapshot>('room.join', { roomId, displayName: 'A' });
-  const again = await client.ok<RoomSnapshot>('room.join', { roomId, displayName: 'A' });
+  const roomId = createRoom();
+  const otherRoomId = createRoom();
+  const first = await client.ok<RoomSnapshot>('room.join', { roomId });
+  const again = await client.ok<RoomSnapshot>('room.join', { roomId });
   expect(again.participantId).toBe(first.participantId);
-  const other = await client.request('room.join', { roomId: otherRoomId, displayName: 'A' });
+  const other = await client.request('room.join', { roomId: otherRoomId });
   expect(other).toMatchObject({ ok: false, error: { code: 'CONFLICT' } });
-  const missing = await client.request('room.join', { roomId: 'nope', displayName: 'A' });
+  const missing = await client.request('room.join', { roomId: 'nope' });
   expect(missing).toMatchObject({ ok: false, error: { code: 'NOT_FOUND' } });
   await client.ok('room.leave', {});
   const leaveAgain = await client.request('room.leave', {});
@@ -124,7 +122,7 @@ describe('Room', () => {
   test('join, leave and the empty → closed lifecycle', () => {
     vi.useFakeTimers();
     const onClosed = vi.fn();
-    const room = new Room(options, log, onClosed);
+    const room = new Room(randomUUID(), options, log, onClosed);
     const alice = new FakePeer();
     const bob = new FakePeer();
     const a = room.join(alice, 'Alice');
@@ -146,8 +144,8 @@ describe('Room', () => {
   });
 
   test('joining twice returns the same participant; another room is a conflict', () => {
-    const room = new Room(options, log, () => {});
-    const other = new Room(options, log, () => {});
+    const room = new Room(randomUUID(), options, log, () => {});
+    const other = new Room(randomUUID(), options, log, () => {});
     const peer = new FakePeer();
     const first = room.join(peer, 'Alice');
     expect(room.join(peer, 'Alice').participantId).toBe(first.participantId);
@@ -155,7 +153,7 @@ describe('Room', () => {
   });
 
   test('the room is full at capacity', () => {
-    const room = new Room({ ...options, capacity: 2 }, log, () => {});
+    const room = new Room(randomUUID(), { ...options, capacity: 2 }, log, () => {});
     room.join(new FakePeer(), 'A');
     room.join(new FakePeer(), 'B');
     expect(() => room.join(new FakePeer(), 'C')).toThrow(
@@ -164,7 +162,7 @@ describe('Room', () => {
   });
 
   test('a mute change reaches everyone, the sender included; a no-op change emits nothing', () => {
-    const room = new Room(options, log, () => {});
+    const room = new Room(randomUUID(), options, log, () => {});
     const alice = new FakePeer();
     const bob = new FakePeer();
     const a = room.join(alice, 'Alice');
@@ -183,7 +181,7 @@ describe('Room', () => {
   });
 
   test('the active speaker is room state: ordered by roomSeq, deduplicated, members only', () => {
-    const room = new Room(options, log, vi.fn(), 'sfu');
+    const room = new Room(randomUUID(), options, log, vi.fn(), 'sfu');
     const alice = new FakePeer();
     const bob = new FakePeer();
     const a = room.join(alice, 'Alice');
@@ -228,7 +226,7 @@ describe('Room invariants', () => {
   test('hold for 1,000 random interleavings', () => {
     fc.assert(
       fc.property(fc.array(op, { maxLength: 40 }), (ops) => {
-        const room = new Room({ ...options, capacity: 4 }, log, () => {});
+        const room = new Room(randomUUID(), { ...options, capacity: 4 }, log, () => {});
         const peers = Array.from({ length: 6 }, () => new FakePeer());
         const views = new Map<FakePeer, { roomSeq: number; members: Set<string> }>();
 
@@ -295,13 +293,13 @@ describe('Room invariants', () => {
 });
 
 test('mesh.signal reaches only the addressed member, stamped with the real sender', async () => {
-  const alice = await TestClient.greeted(host);
-  const bob = await TestClient.greeted(host);
-  const mallory = await TestClient.greeted(host);
-  const roomId = await createRoom(alice);
-  const a = await alice.ok<RoomSnapshot>('room.join', { roomId, displayName: 'Alice' });
-  const b = await bob.ok<RoomSnapshot>('room.join', { roomId, displayName: 'Bob' });
-  await mallory.ok('room.join', { roomId: await createRoom(mallory), displayName: 'Mallory' });
+  const alice = await TestClient.greeted(host, 'Alice');
+  const bob = await TestClient.greeted(host, 'Bob');
+  const mallory = await TestClient.greeted(host, 'Mallory');
+  const roomId = createRoom();
+  const a = await alice.ok<RoomSnapshot>('room.join', { roomId });
+  const b = await bob.ok<RoomSnapshot>('room.join', { roomId });
+  await mallory.ok('room.join', { roomId: createRoom() });
 
   const offer = { description: { type: 'offer', sdp: 'v=0' } };
   await alice.ok('mesh.signal', { to: b.participantId, signal: offer, from: 'spoofed' });

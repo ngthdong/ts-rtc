@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
+import { LoginPage } from './auth/LoginPage.js';
+import { accessToken, api, signOut } from './auth/session.js';
 import { useCall } from './useCall.js';
 import { ConnectivityPanel } from './diagnostics/ConnectivityPanel.js';
 import type { PeerQuality } from './stats/quality.js';
@@ -48,7 +50,34 @@ function QualityInfo({ q, state }: { q: PeerQuality | undefined; state: string }
   );
 }
 
+const PAGE = { fontFamily: 'system-ui, sans-serif', padding: 24, maxWidth: 960 };
+
+/** Signed out: the login page. Signed in: the call (a 401 or close 4401 signs out). */
 export function App() {
+  const [signedIn, setSignedIn] = useState(() => accessToken.get() !== null);
+  useEffect(() => {
+    const onSignedOut = () => {
+      setSignedIn(false);
+    };
+    window.addEventListener('ts-rtc:signed-out', onSignedOut);
+    return () => {
+      window.removeEventListener('ts-rtc:signed-out', onSignedOut);
+    };
+  }, []);
+  if (signedIn) return <Call />;
+  return (
+    <main style={PAGE}>
+      <h1>ts-rtc</h1>
+      <LoginPage
+        onSignedIn={() => {
+          setSignedIn(true);
+        }}
+      />
+    </main>
+  );
+}
+
+function Call() {
   const {
     connection,
     room,
@@ -64,8 +93,12 @@ export function App() {
     sharing,
     leave,
   } = useCall();
-  const [name, setName] = useState('');
   const [roomId, setRoomId] = useState('');
+  const [isPrivate, setIsPrivate] = useState(false);
+  /** The room this tab created: its owner may add members. */
+  const [ownRoomId, setOwnRoomId] = useState<string | null>(null);
+  const [memberEmail, setMemberEmail] = useState('');
+  const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   function run(action: () => Promise<unknown>) {
@@ -83,7 +116,7 @@ export function App() {
       : {};
   const { status, closeCode, closeReason } = connection;
   return (
-    <main style={{ fontFamily: 'system-ui, sans-serif', padding: 24, maxWidth: 960 }}>
+    <main style={PAGE}>
       <h1>ts-rtc</h1>
       <p>
         Signaling: <strong data-testid="status">{status}</strong>
@@ -103,22 +136,29 @@ export function App() {
               The server closed the room ({closedReason}). You can create or join another one.
             </p>
           )}
-          <input
-            aria-label="Your name"
-            placeholder="Your name"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            maxLength={40}
-          />{' '}
-          <button disabled={!name.trim()} onClick={() => run(() => join(null, name))}>
+          <label>
+            <input
+              type="checkbox"
+              checked={isPrivate}
+              onChange={(e) => setIsPrivate(e.target.checked)}
+            />{' '}
+            Private
+          </label>{' '}
+          <button
+            onClick={() =>
+              run(async () => {
+                setNotice(null);
+                const created = await join(null, { visibility: isPrivate ? 'private' : 'public' });
+                setOwnRoomId(created ?? null);
+              })
+            }
+          >
             Create room
           </button>{' '}
-          <button
-            disabled={!name.trim()}
-            onClick={() => run(() => join(null, name, { mode: 'sfu', loopback: true }))}
-          >
+          <button onClick={() => run(() => join(null, { mode: 'sfu', loopback: true }))}>
             SFU loopback test
-          </button>
+          </button>{' '}
+          <button onClick={signOut}>Sign out</button>
           <p>
             <input
               aria-label="Room ID"
@@ -126,10 +166,7 @@ export function App() {
               value={roomId}
               onChange={(e) => setRoomId(e.target.value.trim())}
             />{' '}
-            <button
-              disabled={!name.trim() || !roomId}
-              onClick={() => run(() => join(roomId, name))}
-            >
+            <button disabled={!roomId} onClick={() => run(() => join(roomId))}>
               Join
             </button>
           </p>
@@ -156,6 +193,30 @@ export function App() {
             )}
             <button onClick={() => run(leave)}>Leave</button>
           </p>
+          {room.roomId === ownRoomId && (
+            <p>
+              <input
+                aria-label="Member email"
+                placeholder="Member email"
+                type="email"
+                value={memberEmail}
+                onChange={(e) => setMemberEmail(e.target.value.trim())}
+              />{' '}
+              <button
+                disabled={!memberEmail}
+                onClick={() =>
+                  run(async () => {
+                    await api('POST', `/api/rooms/${room.roomId}/members`, { email: memberEmail });
+                    setNotice(`${memberEmail} can join now`);
+                    setMemberEmail('');
+                  })
+                }
+              >
+                Add member
+              </button>
+            </p>
+          )}
+          {notice && <p role="status">{notice}</p>}
           {mediaError && <p style={{ color: 'darkorange' }}>{mediaError}</p>}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 12 }}>
             <figure style={{ margin: 0 }} {...speaking(room.participantId)}>

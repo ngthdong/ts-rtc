@@ -40,7 +40,7 @@ test('events that race ahead of the join response are replayed on top of the sna
       return snapshot(1);
     },
   });
-  await room.join('r', 'Alice');
+  await room.join('r');
   expect(room.view).toMatchObject({ roomSeq: 2, members: [alice, bob] });
 });
 
@@ -49,7 +49,7 @@ test('a roomSeq gap triggers room.sync instead of guessing', async () => {
     'room.join': () => snapshot(1),
     'room.sync': () => snapshot(3, [alice, carol]),
   });
-  await room.join('r', 'Alice');
+  await room.join('r');
   emit(joined(3, carol)); // seq 2 was missed
   await vi.waitFor(() => {
     expect(room.view).toMatchObject({ roomSeq: 3, members: [alice, carol] });
@@ -59,14 +59,14 @@ test('a roomSeq gap triggers room.sync instead of guessing', async () => {
 
 test('participant.left removes the member', async () => {
   const { room, emit } = setup({ 'room.join': () => snapshot(2, [alice, bob]) });
-  await room.join('r', 'Alice');
+  await room.join('r');
   emit({ type: 'participant.left', payload: { roomSeq: 3, participantId: 'b', reason: 'left' } });
   expect(room.view?.members).toEqual([alice]);
 });
 
 test('participant.updated changes only that member', async () => {
   const { room, emit } = setup({ 'room.join': () => snapshot(2, [alice, bob]) });
-  await room.join('r', 'Alice');
+  await room.join('r');
   emit({
     type: 'participant.updated',
     payload: { roomSeq: 3, participantId: 'b', audioMuted: true, videoMuted: false },

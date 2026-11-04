@@ -20,13 +20,16 @@ test('health endpoints answer 200', async () => {
 test('hello returns a welcome, then heartbeats are answered', async () => {
   await start({ iceServersFor: (key) => [{ urls: 'turn:t', username: key, credential: 'c' }] });
   const client = await TestClient.connect(host);
-  const welcome = await client.request('session.hello', { protocolVersions: [1] });
+  const welcome = await client.request('session.hello', {
+    protocolVersions: [1],
+    accessToken: 'user:alice',
+  });
   expect(welcome).toMatchObject({ kind: 'res', ok: true, type: 'session.hello' });
   expect(welcome).toHaveProperty('payload.protocolVersion', 1);
   expect(welcome).toHaveProperty('payload.heartbeatIntervalMs', 10_000);
-  const sessionId = welcome.ok ? (welcome.payload as { sessionId: string }).sessionId : '';
+  // TURN usernames carry the user id (TestDirectory: user:alice is u-alice).
   expect(welcome).toHaveProperty('payload.iceServers', [
-    { urls: 'turn:t', username: sessionId, credential: 'c' },
+    { urls: 'turn:t', username: 'u-alice', credential: 'c' },
   ]);
   const ack = await client.request('session.heartbeat', {}, 'hb-1');
   expect(ack).toMatchObject({ id: 'hb-1', ok: true });
@@ -67,6 +70,16 @@ test('an unsupported version gets an error, then close 4400', async () => {
   const reply = await client.request('session.hello', { protocolVersions: [2] });
   expect(reply).toMatchObject({ ok: false, error: { code: 'UNSUPPORTED_VERSION' } });
   expect(await client.closed).toBe(4400);
+});
+
+test('a hello without a valid access token gets UNAUTHENTICATED, then close 4401', async () => {
+  await start();
+  for (const payload of [{}, { accessToken: 'not a token' }]) {
+    const client = await TestClient.connect(host);
+    const reply = await client.request('session.hello', { protocolVersions: [1], ...payload });
+    expect(reply).toMatchObject({ ok: false, error: { code: 'UNAUTHENTICATED' } });
+    expect(await client.closed).toBe(4401);
+  }
 });
 
 test('no hello before the deadline closes with 4408', async () => {

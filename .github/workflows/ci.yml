@@ -7,6 +7,21 @@ on:
 jobs:
   check:
     runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: ts_rtc
+          POSTGRES_PASSWORD: ts_rtc
+          POSTGRES_DB: ts_rtc
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U ts_rtc -d ts_rtc"
+          --health-interval 2s --health-timeout 3s --health-retries 30
+    env:
+      # Enables test/db.test.ts (migrations, registration races, the API against Postgres).
+      TEST_DATABASE_URL: postgres://ts_rtc:ts_rtc@127.0.0.1:5432/ts_rtc
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -28,6 +43,10 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: echo "TURN_SECRET=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
-      - run: docker compose up -d coturn
+      - run: docker compose up -d --wait postgres coturn
       - run: pnpm --filter @ts-rtc/e2e exec playwright install --with-deps chromium
       - run: pnpm e2e
+        env:
+          # Failure injection in auth.e2e.ts: Postgres down mid-call.
+          PG_STOP: docker compose stop postgres
+          PG_START: docker compose start postgres

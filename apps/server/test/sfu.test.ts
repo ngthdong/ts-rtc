@@ -36,11 +36,11 @@ async function setup(
   app = server.app;
   const join = async (roomId?: string) => {
     const client = await TestClient.greeted(server.host);
-    roomId ??= (await client.ok<{ roomId: string }>('room.create', { mode: 'sfu' })).roomId;
-    const snapshot = await client.ok<RoomSnapshot>('room.join', { roomId, displayName: 'P' });
+    roomId ??= server.directory.create('sfu');
+    const snapshot = await client.ok<RoomSnapshot>('room.join', { roomId });
     return { client, snapshot, roomId };
   };
-  return { media, join };
+  return { media, join, directory: server.directory };
 }
 
 const fakeDtls = {
@@ -212,11 +212,11 @@ test('a transport not connected within the deadline is closed and its owner is t
 });
 
 test('SFU requests outside an SFU room are refused', async () => {
-  const { join } = await setup(22_060);
+  const { join, directory } = await setup(22_060);
   const { client } = await join();
   await client.ok('room.leave', {});
-  const { roomId } = await client.ok<{ roomId: string }>('room.create', { mode: 'mesh' });
-  await client.ok('room.join', { roomId, displayName: 'M' });
+  const roomId = directory.create('mesh');
+  await client.ok('room.join', { roomId });
   expect(await client.request('sfu.createTransport', { direction: 'send' })).toMatchObject({
     ok: false,
     error: { code: 'INVALID_STATE' },

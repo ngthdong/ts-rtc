@@ -1,21 +1,7 @@
-import { Writable } from 'node:stream';
 import type { RoomSnapshot } from '@ts-rtc/protocol';
 import { afterEach, expect, test } from 'vitest';
 import type { App } from '../src/app.js';
-import { createLogger } from '../src/logger.js';
-import { startServer, TestClient } from './helpers.js';
-
-/** A real logger (redaction included) writing JSON lines into an array. */
-function captureLogs() {
-  const lines: Record<string, unknown>[] = [];
-  const sink = new Writable({
-    write(chunk: Buffer, _encoding, done) {
-      lines.push(JSON.parse(chunk.toString()) as Record<string, unknown>);
-      done();
-    },
-  });
-  return { lines, log: createLogger({ level: 'info', env: 'test', version: 'v-test' }, sink) };
-}
+import { captureLogs, startServer, TestClient, type TestDirectory } from './helpers.js';
 
 const quality = {
   peer: 'p2',
@@ -35,10 +21,10 @@ afterEach(async () => {
   await app?.close();
 });
 
-async function joined(host: string) {
+async function joined({ host, directory }: { host: string; directory: TestDirectory }) {
   const client = await TestClient.greeted(host);
-  const { roomId } = await client.ok<{ roomId: string }>('room.create', { mode: 'mesh' });
-  const snapshot = await client.ok<RoomSnapshot>('room.join', { roomId, displayName: 'A' });
+  const roomId = directory.create('mesh');
+  const snapshot = await client.ok<RoomSnapshot>('room.join', { roomId });
   return { client, snapshot };
 }
 
@@ -46,7 +32,7 @@ test('a quality report is logged per peer, correlated with session, room and par
   const { lines, log } = captureLogs();
   const server = await startServer({}, log);
   app = server.app;
-  const { client, snapshot } = await joined(server.host);
+  const { client, snapshot } = await joined(server);
   await client.ok('client.report', { kind: 'quality', peers: [quality] });
   const line = lines.find((l) => l.msg === 'client.quality');
   expect(line).toMatchObject({
@@ -64,7 +50,7 @@ test('a quality report is logged per peer, correlated with session, room and par
 test('reports are rate-limited per session: quality at most once per 5 s', async () => {
   const server = await startServer();
   app = server.app;
-  const { client } = await joined(server.host);
+  const { client } = await joined(server);
   await client.ok('client.report', { kind: 'quality', peers: [quality] });
   const second = await client.request('client.report', { kind: 'quality', peers: [quality] });
   expect(second).toMatchObject({ ok: false, error: { code: 'RATE_LIMITED', retryable: true } });
@@ -76,7 +62,7 @@ test('invalid or oversized reports are rejected; unknown fields (addresses) are 
   const { lines, log } = captureLogs();
   const server = await startServer({}, log);
   app = server.app;
-  const { client } = await joined(server.host);
+  const { client } = await joined(server);
   const tooMany = Array.from({ length: 11 }, () => quality);
   for (const payload of [
     { kind: 'quality', peers: tooMany },

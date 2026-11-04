@@ -48,8 +48,8 @@ async function setup(portBase: number) {
   /** A member with a send and a recv transport. */
   const member = async () => {
     const client = await TestClient.greeted(server.host);
-    roomId ??= (await client.ok<{ roomId: string }>('room.create', {})).roomId; // default: sfu
-    const snapshot = await client.ok<RoomSnapshot>('room.join', { roomId, displayName: 'P' });
+    roomId ??= server.directory.create('sfu');
+    const snapshot = await client.ok<RoomSnapshot>('room.join', { roomId });
     const send = await client.ok<{ transportId: string }>('sfu.createTransport', {
       direction: 'send',
     });
@@ -143,7 +143,7 @@ test('only the owner pauses a Producer; new Consumers then start with producerPa
   const bob = await member();
   const { producerId } = ok<{ producerId: string }>(await alice.produce('audio'));
   expect(await bob.client.request('sfu.pauseProducer', { producerId, paused: true })).toMatchObject(
-    { ok: false, error: { code: 'NOT_FOUND' } },
+    { ok: false, error: { code: 'FORBIDDEN' } }, // the policy: owner-scoped
   );
   await alice.client.ok('sfu.pauseProducer', { producerId, paused: true });
   expect(ok<{ producerPaused: boolean }>(await bob.consume(producerId)).producerPaused).toBe(true);
@@ -217,7 +217,7 @@ test('one screen sharer per room: the lock is the Producer, released by stop or 
   const { consumerId } = ok<{ consumerId: string }>(await carol.consume(screen));
   expect(await bob.client.request('sfu.closeProducer', { producerId: screen })).toMatchObject({
     ok: false,
-    error: { code: 'NOT_FOUND' },
+    error: { code: 'FORBIDDEN' },
   }); // not Bob's to stop
   await alice.client.ok('sfu.closeProducer', { producerId: screen });
   expect(await carol.client.waitForEvent('sfu.consumerClosed')).toMatchObject({

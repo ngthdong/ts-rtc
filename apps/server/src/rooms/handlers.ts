@@ -1,21 +1,28 @@
 import {
   SignalingError,
+  type EventPayload,
   type LeaveReason,
-  type RoomMode,
   type RoomSnapshot,
 } from '@ts-rtc/protocol';
 import type { FastifyBaseLogger } from 'fastify';
+import type { Directory } from '../auth/directory.js';
+import { authorize, type MediaAction } from '../auth/policy.js';
+import type { RoomRecord } from '../db/rooms.js';
+import type { User } from '../db/users.js';
 import type { MediaController } from '../media/media-controller.js';
-import type { RequestRouter } from '../router.js';
+import type { RequestContext, RequestRouter } from '../router.js';
 import type { Session } from '../session.js';
 import { Room, type Binding, type RoomOptions } from './room.js';
 
+/** Live calls of durable rooms: a Room exists while its call does, under the room's id. */
 export class RoomRegistry {
   private readonly rooms = new Map<string, Room>();
 
   constructor(
     private readonly options: RoomOptions & { sfuCapacity: number },
     private readonly log: FastifyBaseLogger,
+    /** Who the user is, and the durable room as that user sees it. */
+    readonly directory: Directory,
     /** Absent: SFU rooms cannot be joined (tests and Mesh-only setups). */
     readonly media: MediaController | undefined,
   ) {
@@ -53,28 +60,42 @@ export class RoomRegistry {
     return { ...snapshot, producers: others };
   }
 
-  create(mode: RoomMode): Room {
+  /** The live call of a durable room: started by its first join, gone when it closes. */
+  open(record: RoomRecord): Room {
+    const existing = this.rooms.get(record.id);
+    if (existing) return existing;
     const onClosed = (closed: Room) => {
       this.rooms.delete(closed.id);
       if (closed.mode === 'sfu') this.media?.closeRouter(closed.id);
     };
-    const capacity = mode === 'sfu' ? this.options.sfuCapacity : this.options.capacity;
-    const room = new Room({ ...this.options, capacity }, this.log, onClosed, mode);
+    const modeLimit = record.mode === 'sfu' ? this.options.sfuCapacity : this.options.capacity;
+    const capacity = Math.min(modeLimit, record.maxParticipants);
+    const room = new Room(
+      record.id,
+      { ...this.options, capacity },
+      this.log,
+      onClosed,
+      record.mode,
+    );
     this.rooms.set(room.id, room);
     return room;
   }
 
-  get(roomId: string): Room | undefined {
-    return this.rooms.get(roomId);
+  /** Ends a live call for everyone (e.g. its durable room was deleted). None: nothing to do. */
+  async close(roomId: string, reason: EventPayload<'room.closed'>['reason']): Promise<void> {
+    const room = this.rooms.get(roomId);
+    if (room) await room.executor.run(() => room.close(reason));
   }
 }
 
 export function registerRoomHandlers(router: RequestRouter, rooms: RoomRegistry): void {
   router
-    .on('room.create', ({ mode = 'sfu' }) => ({ roomId: rooms.create(mode).id }))
-    .on('room.join', ({ roomId, displayName }, { session }) => {
-      const room = rooms.get(roomId);
-      if (!room) throw new SignalingError('NOT_FOUND', 'room not found');
+    .on('room.join', async ({ roomId }, { session, log }) => {
+      const user = requireUser(session);
+      const record = await rooms.directory.room(roomId, user.id); // fresh, never cached
+      if (!record) throw new SignalingError('NOT_FOUND', 'room not found');
+      authorize(log, { userId: user.id }, 'room.join', record);
+      const room = rooms.open(record);
       return room.executor.run(async () => {
         if (room.mode === 'sfu' && room.state !== 'closed' && !session.binding) {
           if (!rooms.media) throw new SignalingError('UNAVAILABLE', 'SFU is not enabled');
@@ -82,7 +103,7 @@ export function registerRoomHandlers(router: RequestRouter, rooms: RoomRegistry)
           // cannot close while we wait (closing is an executor task too).
           room.routerRtpCapabilities ??= await rooms.media.ensureRouter(room.id);
         }
-        return rooms.withProducers(room, room.join(session, displayName));
+        return rooms.withProducers(room, room.join(session, user.displayName));
       });
     })
     .on('room.leave', async (_payload, { session }) => {
@@ -93,22 +114,43 @@ export function registerRoomHandlers(router: RequestRouter, rooms: RoomRegistry)
       const { room, participantId } = requireBinding(session);
       return room.executor.run(() => rooms.withProducers(room, room.snapshot(participantId)));
     })
-    .on('participant.update', async (state, { session }) => {
-      const { room, participantId } = requireBinding(session);
-      await room.executor.run(() => {
-        room.update(participantId, state);
+    .on('participant.update', async (state, ctx) => {
+      await inRoom(ctx, 'participant.update', (room, me) => {
+        room.update(me, state);
       });
       return {};
     })
-    .on('mesh.signal', async ({ to, signal }, { session, log }) => {
-      const { room, participantId } = requireBinding(session);
+    .on('mesh.signal', async ({ to, signal }, ctx) => {
       const kind = 'description' in signal ? signal.description.type : 'candidate';
-      log.debug({ participantId, to, kind }, 'mesh.signal'); // never the SDP itself
-      await room.executor.run(() => {
-        room.relay(participantId, to, signal);
+      await inRoom(ctx, 'mesh.signal', (room, me) => {
+        ctx.log.debug({ participantId: me, to, kind }, 'mesh.signal'); // never the SDP itself
+        room.relay(me, to, signal);
       });
       return {};
     });
+}
+
+/**
+ * Runs `task` in the caller's room executor once the policy allows `action` there: checked
+ * inside the executor, so a leave or close queued before it is seen.
+ */
+export function inRoom<T>(
+  { session, log }: RequestContext,
+  action: MediaAction,
+  task: (room: Room, participantId: string) => T | Promise<T>,
+  targetOwner?: (room: Room) => string | undefined,
+): Promise<T> {
+  const { room, participantId } = requireBinding(session);
+  const userId = requireUser(session).id;
+  return room.executor.run(() => {
+    const joined = room.has(participantId);
+    const owner = joined && targetOwner ? targetOwner(room) : undefined;
+    if (joined && targetOwner && owner === undefined) {
+      throw new SignalingError('NOT_FOUND', 'no such producer in this room');
+    }
+    authorize(log, { userId }, action, { joined, ownsTarget: owner === participantId });
+    return task(room, participantId);
+  });
 }
 
 export function leaveOnDisconnect(session: Session, rooms: RoomRegistry): void {
@@ -118,4 +160,9 @@ export function leaveOnDisconnect(session: Session, rooms: RoomRegistry): void {
 export function requireBinding(session: Session): Binding {
   if (!session.binding) throw new SignalingError('INVALID_STATE', 'not in a room');
   return session.binding;
+}
+
+export function requireUser(session: Session): User {
+  if (!session.user) throw new SignalingError('UNAUTHENTICATED', 'sign in first');
+  return session.user;
 }

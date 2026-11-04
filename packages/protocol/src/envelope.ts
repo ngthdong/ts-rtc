@@ -38,6 +38,8 @@ export const CloseCode = {
   MessageTooBig: 1009,
   TryAgainLater: 1013,
   UnsupportedVersion: 4400,
+  /** No valid access token in session.hello: sign in again (like HTTP 401). */
+  Unauthenticated: 4401,
   HandshakeTimeout: 4408,
 } as const;
 
@@ -83,8 +85,9 @@ export class SignalingError extends Error {
     readonly code: ErrorCode,
     message: string,
     readonly closeCode?: number,
+    options?: ErrorOptions, // { cause }: the underlying error, for logs
   ) {
-    super(message);
+    super(message, options);
     this.name = 'SignalingError';
   }
 

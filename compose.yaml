@@ -9,3 +9,23 @@ services:
       - /etc/coturn/turnserver.conf
       - --static-auth-secret=${TURN_SECRET:?set TURN_SECRET in .env}
     restart: unless-stopped
+
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: ts_rtc
+      POSTGRES_PASSWORD: ts_rtc
+      POSTGRES_DB: ts_rtc
+    ports:
+      - 127.0.0.1:5432:5432
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: [CMD-SHELL, pg_isready -U ts_rtc -d ts_rtc]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    restart: unless-stopped
+
+volumes:
+  pgdata:
