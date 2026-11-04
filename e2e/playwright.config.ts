@@ -19,10 +19,18 @@ export default defineConfig({
       args: ['--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream'],
     },
   },
+  projects: [
+    { name: 'mesh', testIgnore: /sfu-.*\.e2e\.ts$/ },
+    // These assert the server-wide mediasoup counts (/debug/media): one test at a time.
+    // Mesh tests create no mediasoup objects, so they may run alongside.
+    { name: 'sfu', testMatch: /sfu-.*\.e2e\.ts$/, workers: 1 },
+  ],
   webServer: [
     {
       // No watch mode: a file saved mid-run would restart the server and drop every call.
       command: 'pnpm --filter @ts-rtc/server start',
+      // SERVER_LOGS=1: print the server's JSON log lines (prefixed [WebServer]).
+      stdout: process.env.SERVER_LOGS ? 'pipe' : 'ignore',
       url: `http://127.0.0.1:${apiPort}/healthz`,
       reuseExistingServer: !process.env.CI,
     },

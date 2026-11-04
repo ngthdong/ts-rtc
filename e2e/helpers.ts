@@ -19,6 +19,7 @@ declare global {
     __tsRtc?: {
       inboundBytes(): Promise<Bytes>;
       quality(): Record<string, Quality>;
+      receivedTracks(): number;
       resources(): { openConnections: number; liveLocalTracks: number };
     };
   }
@@ -66,6 +67,10 @@ export function inboundBytes(page: Page): Promise<Bytes> {
 
 export function resources(page: Page) {
   return page.evaluate(() => window.__tsRtc?.resources());
+}
+
+export function receivedTracks(page: Page) {
+  return page.evaluate(() => window.__tsRtc?.receivedTracks());
 }
 
 export function quality(page: Page): Promise<Record<string, Quality>> {
