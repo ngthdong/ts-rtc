@@ -1,4 +1,4 @@
-// Worker startup time, idle Worker memory, Router and WebRtcTransport creation latency.
+// Worker startup, idle Worker memory; Router, WebRtcTransport, Producer, Consumer creation latency.
 // Run: pnpm --filter @ts-rtc/server exec tsx bench/media.ts
 import { createWorker } from 'mediasoup';
 import { MEDIA_CODECS } from '../src/media/mediasoup/codecs.js';
@@ -40,6 +40,31 @@ for (let i = 0; i < 1000; i++) {
   transport.close();
 }
 transports.sort((a, b) => a - b);
+
+// Producer and Consumer creation: RTP-less (no browser), like the integration tests.
+const send = await router.createWebRtcTransport({ webRtcServer });
+const recv = await router.createWebRtcTransport({ webRtcServer });
+const opus = { mimeType: 'audio/opus', payloadType: 111, clockRate: 48_000, channels: 2 };
+const producing: number[] = [];
+const consuming: number[] = [];
+for (let i = 0; i < 1000; i++) {
+  let startedAt = performance.now();
+  const producer = await send.produce({
+    kind: 'audio',
+    rtpParameters: { mid: String(i), codecs: [opus], encodings: [{ ssrc: 10_000 + i }] },
+  });
+  producing.push(performance.now() - startedAt);
+  startedAt = performance.now();
+  await recv.consume({
+    producerId: producer.id,
+    rtpCapabilities: router.rtpCapabilities,
+    paused: true,
+  });
+  consuming.push(performance.now() - startedAt);
+  producer.close(); // closes its Consumer too
+}
+producing.sort((a, b) => a - b);
+consuming.sort((a, b) => a - b);
 worker.close();
 
 console.log(
@@ -53,4 +78,10 @@ console.log(
 );
 console.log(
   `createWebRtcTransport (1000): p50 ${ms(quantile(transports, 0.5))}, p99 ${ms(quantile(transports, 0.99))}`,
+);
+console.log(
+  `produce (1000): p50 ${ms(quantile(producing, 0.5))}, p99 ${ms(quantile(producing, 0.99))}`,
+);
+console.log(
+  `consume (1000): p50 ${ms(quantile(consuming, 0.5))}, p99 ${ms(quantile(consuming, 0.99))}`,
 );
