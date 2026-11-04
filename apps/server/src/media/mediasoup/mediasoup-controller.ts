@@ -8,6 +8,7 @@ import type {
   TransportParams,
   WorkerInfo,
 } from '../media-controller.js';
+import { SpeakerGate } from '../speaker-gate.js';
 import { MEDIA_CODECS } from './codecs.js';
 import { TransportService, type TransportOptions } from './transport-service.js';
 import { WorkerPool, type PoolWorker, type WorkerPoolOptions } from './worker-pool.js';
@@ -15,6 +16,9 @@ import { WorkerPool, type PoolWorker, type WorkerPoolOptions } from './worker-po
 interface RouterEntry {
   router: types.Router;
   slot: PoolWorker;
+  /** Mic Producers only; its dominant-speaker changes go through the gate. */
+  observer: types.ActiveSpeakerObserver;
+  speaker: SpeakerGate;
 }
 
 /** One Router per room, placed on the least-loaded Worker. */
@@ -23,14 +27,13 @@ export class MediasoupController implements MediaController {
   private readonly routers = new Map<string, Promise<RouterEntry>>();
   private readonly created = new Map<string, RouterEntry>();
   private readonly lostListeners: ((roomId: string) => void)[] = [];
+  private readonly speakerListeners: ((roomId: string, participantId: string) => void)[] = [];
   private readonly pool: WorkerPool;
   private readonly transports: TransportService;
   // Transport, Producer and Consumer operations are the TransportService's, exposed as is.
   readonly connectTransport: MediaController['connectTransport'];
-  readonly produce: MediaController['produce'];
   readonly consume: MediaController['consume'];
   readonly resumeConsumer: MediaController['resumeConsumer'];
-  readonly pauseProducer: MediaController['pauseProducer'];
   readonly closeProducer: MediaController['closeProducer'];
   readonly producers: MediaController['producers'];
   readonly closeParticipant: MediaController['closeParticipant'];
@@ -46,10 +49,8 @@ export class MediasoupController implements MediaController {
     });
     const transports = (this.transports = new TransportService(options, log));
     this.connectTransport = transports.connect.bind(transports);
-    this.produce = transports.produce.bind(transports);
     this.consume = transports.consume.bind(transports);
     this.resumeConsumer = transports.resumeConsumer.bind(transports);
-    this.pauseProducer = transports.pauseProducer.bind(transports);
     this.closeProducer = transports.closeProducer.bind(transports);
     this.producers = transports.producers.bind(transports);
     this.closeParticipant = transports.closeParticipant.bind(transports);
@@ -86,8 +87,9 @@ export class MediasoupController implements MediaController {
     this.routers.delete(roomId);
     // Possibly still being created: close it as soon as it exists.
     entry.then(
-      ({ router, slot }) => {
+      ({ router, slot, speaker }) => {
         this.created.delete(roomId);
+        speaker.close(); // no timer outlives its room
         this.transports.forgetRoom(roomId);
         if (router.closed) return;
         router.close(); // cascades to its transports, Producers, Consumers
@@ -107,6 +109,36 @@ export class MediasoupController implements MediaController {
     if (!entry) throw new SignalingError('INVALID_STATE', 'the room has no media router');
     const { router, slot } = entry;
     return this.transports.create(router, slot.webRtcServer, roomId, participantId, direction);
+  }
+
+  /** Mic Producers join the room's observer; mediasoup drops closed ones itself. */
+  async produce(...args: Parameters<MediaController['produce']>) {
+    const info = await this.transports.produce(...args);
+    const entry = this.created.get(this.transports.roomOf(info.participantId) ?? '');
+    if (info.source === 'mic' && entry) {
+      await entry.observer.addProducer({ producerId: info.producerId }).catch(() => undefined);
+    }
+    return info;
+  }
+
+  /**
+   * A muted (paused) mic leaves the observer and rejoins on unmute: a paused Producer sends no
+   * audio, so its activity would freeze and it could stay the dominant speaker while silent.
+   */
+  async pauseProducer(participantId: string, producerId: string, paused: boolean) {
+    await this.transports.pauseProducer(participantId, producerId, paused);
+    const roomId = this.transports.roomOf(participantId) ?? '';
+    const entry = this.created.get(roomId);
+    const mic = this.transports.producers(roomId).find((p) => p.producerId === producerId);
+    if (!entry || mic?.source !== 'mic') return;
+    const change = paused
+      ? entry.observer.removeProducer({ producerId })
+      : entry.observer.addProducer({ producerId });
+    await change.catch(() => undefined); // closed meanwhile
+  }
+
+  onActiveSpeaker(listener: (roomId: string, participantId: string) => void): void {
+    this.speakerListeners.push(listener);
   }
 
   onRouterLost(listener: (roomId: string) => void): void {
@@ -132,13 +164,23 @@ export class MediasoupController implements MediaController {
     const slot = this.pool.pick();
     if (!slot) throw new SignalingError('UNAVAILABLE', 'no media server available, retry');
     slot.routers += 1;
+    let router: types.Router | undefined;
     try {
-      const router = await slot.worker.createRouter({ mediaCodecs: MEDIA_CODECS });
-      const entry = { router, slot };
+      router = await slot.worker.createRouter({ mediaCodecs: MEDIA_CODECS });
+      // One observer + gate per room: calm, rate-limited speaker changes for the UI.
+      const observer = await router.createActiveSpeakerObserver({ interval: 300 });
+      const speaker = new SpeakerGate((participantId) => {
+        for (const listener of this.speakerListeners) listener(roomId, participantId);
+      });
+      observer.on('dominantspeaker', ({ producer }) => {
+        speaker.offer(String(producer.appData.participantId));
+      });
+      const entry = { router, slot, observer, speaker };
       this.created.set(roomId, entry);
       this.log.info({ roomId, workerPid: slot.worker.pid, routerId: router.id }, 'router.created');
       return entry;
     } catch (err) {
+      router?.close(); // created, but its observer was not
       slot.routers -= 1;
       this.log.warn({ roomId, err }, 'router.create_failed'); // e.g. the Worker died meanwhile
       throw new SignalingError('UNAVAILABLE', 'media server unavailable, retry');
@@ -148,6 +190,7 @@ export class MediasoupController implements MediaController {
   private workerDied(dead: PoolWorker): void {
     const lost = [...this.created].filter(([, entry]) => entry.slot === dead).map(([id]) => id);
     for (const roomId of lost) {
+      this.created.get(roomId)?.speaker.close();
       this.created.delete(roomId);
       this.routers.delete(roomId);
       this.transports.forgetRoom(roomId);

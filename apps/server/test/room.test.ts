@@ -181,6 +181,28 @@ describe('Room', () => {
     expect(room.roomSeq).toBe(3);
     expect(room.snapshot(a.participantId).members[0]).toMatchObject({ audioMuted: true });
   });
+
+  test('the active speaker is room state: ordered by roomSeq, deduplicated, members only', () => {
+    const room = new Room(options, log, vi.fn(), 'sfu');
+    const alice = new FakePeer();
+    const bob = new FakePeer();
+    const a = room.join(alice, 'Alice');
+    const b = room.join(bob, 'Bob');
+    room.setActiveSpeaker(b.participantId);
+    const event = {
+      type: 'sfu.activeSpeaker',
+      payload: { roomSeq: 3, participantId: b.participantId },
+    };
+    expect(alice.events.at(-1)).toEqual(event);
+    expect(bob.events.at(-1)).toEqual(event); // the speaker too: everyone shows the same tile
+    room.setActiveSpeaker(b.participantId); // the same speaker again: no event
+    room.setActiveSpeaker('gone'); // not (or no longer) a member: dropped
+    expect(room.roomSeq).toBe(3);
+    expect(alice.events).toHaveLength(2);
+    expect(room.snapshot(a.participantId).activeSpeaker).toBe(b.participantId);
+    room.remove(b.participantId, 1, 'left');
+    expect(room.snapshot(a.participantId)).not.toHaveProperty('activeSpeaker');
+  });
 });
 
 describe('Room invariants', () => {

@@ -60,6 +60,7 @@ export class Room {
   roomSeq = 0;
   /** SFU rooms: set once the room's Router exists (by the join handler, in the executor). */
   routerRtpCapabilities: RtpCapabilities | undefined;
+  activeSpeaker: string | undefined;
   private readonly participants = new Map<string, Participant>();
   private readonly log: FastifyBaseLogger;
   private timer: NodeJS.Timeout | undefined;
@@ -137,6 +138,13 @@ export class Room {
     this.broadcast('participant.updated', { roomSeq, participantId, ...state });
   }
 
+  /** The speaker highlight is room state: ordered by roomSeq like membership. */
+  setActiveSpeaker(participantId: string): void {
+    if (!this.participants.has(participantId) || participantId === this.activeSpeaker) return;
+    this.activeSpeaker = participantId;
+    this.broadcast('sfu.activeSpeaker', { roomSeq: ++this.roomSeq, participantId });
+  }
+
   has(participantId: string): boolean {
     return this.participants.has(participantId);
   }
@@ -174,7 +182,7 @@ export class Room {
     if (!this.participants.has(participantId)) {
       throw new SignalingError('INVALID_STATE', 'not a member of this room');
     }
-    const { id: roomId, roomSeq, mode, members, routerRtpCapabilities } = this;
+    const { id: roomId, roomSeq, mode, members, routerRtpCapabilities, activeSpeaker } = this;
     return {
       roomId,
       participantId,
@@ -182,6 +190,7 @@ export class Room {
       mode,
       members,
       ...(routerRtpCapabilities && { routerRtpCapabilities }),
+      ...(activeSpeaker && this.participants.has(activeSpeaker) && { activeSpeaker }),
     };
   }
 
