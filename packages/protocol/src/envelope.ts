@@ -83,8 +83,9 @@ export class SignalingError extends Error {
     readonly code: ErrorCode,
     message: string,
     readonly closeCode?: number,
+    options?: ErrorOptions, // { cause }: the underlying error, for logs
   ) {
-    super(message);
+    super(message, options);
     this.name = 'SignalingError';
   }
 
