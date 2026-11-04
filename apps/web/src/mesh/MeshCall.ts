@@ -12,6 +12,8 @@ export interface RemotePeer {
   participantId: string;
   stream: MediaStream | null;
   state: RTCPeerConnectionState;
+  /** A screen share (SFU): its own, larger tile. */
+  screen?: boolean;
 }
 
 /**

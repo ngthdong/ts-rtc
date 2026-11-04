@@ -128,10 +128,16 @@ export class TransportService {
   ): Promise<ProducerInfo> {
     const { party, transport } = this.owned(participantId, transportId, 'send');
     if ((source === 'mic') !== (kind === 'audio')) {
-      throw new SignalingError('INVALID_PAYLOAD', 'mic is audio, camera is video');
+      throw new SignalingError('INVALID_PAYLOAD', 'mic is audio, camera and screen are video');
     }
     const existing = party.producers.get(source);
     if (existing) throw new SignalingError('CONFLICT', `${source} producer exists: ${existing.id}`);
+    // One sharer per room. The lock is the open screen Producer itself: closing it (stop,
+    // leave, crash) releases it, so there is no flag to drift. Callers run in the room executor.
+    const sharer = this.producers(party.roomId).find((p) => p.source === 'screen');
+    if (source === 'screen' && sharer) {
+      throw new SignalingError('CONFLICT', `already sharing: ${sharer.participantId}`);
+    }
     let producer: types.Producer;
     try {
       producer = await transport.produce({
@@ -219,6 +225,14 @@ export class TransportService {
     const producer = own.find((p) => p.id === producerId);
     if (!producer) throw new SignalingError('NOT_FOUND', 'no such producer');
     await (paused ? producer.pause() : producer.resume());
+  }
+
+  closeProducer(participantId: string, producerId: string): void {
+    const own = [...(this.parties.get(participantId)?.producers.values() ?? [])];
+    const producer = own.find((p) => p.id === producerId);
+    if (!producer) throw new SignalingError('NOT_FOUND', 'no such producer');
+    producer.close(); // its Consumers emit producerclose → sfu.consumerClosed
+    this.log.info({ participantId, producerId }, 'producer.closed');
   }
 
   closeParticipant(participantId: string): void {

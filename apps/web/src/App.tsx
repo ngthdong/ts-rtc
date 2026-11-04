@@ -60,6 +60,8 @@ export function App() {
     quality,
     join,
     toggle,
+    toggleScreen,
+    sharing,
     leave,
   } = useCall();
   const [name, setName] = useState('');
@@ -140,6 +142,13 @@ export function App() {
             <button onClick={() => run(() => toggle('video'))}>
               {muted.videoMuted ? 'Camera on' : 'Camera off'}
             </button>{' '}
+            {room.mode === 'sfu' && (
+              <>
+                <button onClick={() => run(toggleScreen)}>
+                  {sharing ? 'Stop sharing' : 'Share screen'}
+                </button>{' '}
+              </>
+            )}
             <button onClick={() => run(leave)}>Leave</button>
           </p>
           {mediaError && <p style={{ color: 'darkorange' }}>{mediaError}</p>}
@@ -150,6 +159,18 @@ export function App() {
             </figure>
             {remotes.map((peer) => {
               const m = member(peer.participantId);
+              if (peer.screen) {
+                return (
+                  <figure
+                    key={`${peer.participantId}#screen`}
+                    style={{ margin: 0, gridColumn: '1 / -1' }}
+                    data-testid="screen"
+                  >
+                    <Video stream={peer.stream} muted />
+                    <figcaption>{m?.displayName ?? 'Someone'} is sharing their screen</figcaption>
+                  </figure>
+                );
+              }
               return (
                 <figure key={peer.participantId} style={{ margin: 0 }} data-testid="remote">
                   <Video stream={peer.stream} />

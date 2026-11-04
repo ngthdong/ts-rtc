@@ -54,6 +54,12 @@ export function registerSfuHandlers(router: RequestRouter, rooms: RoomRegistry):
         return {};
       }),
     )
+    .on('sfu.closeProducer', ({ producerId }, { session }) =>
+      inSfuRoom(session, (media, _room, me) => {
+        media.closeProducer(me, producerId);
+        return Promise.resolve({});
+      }),
+    )
     .on('sfu.pauseProducer', ({ producerId, paused }, { session }) =>
       inSfuRoom(session, async (media, _room, me) => {
         await media.pauseProducer(me, producerId, paused);

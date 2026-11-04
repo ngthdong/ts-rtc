@@ -19,6 +19,8 @@ declare global {
       rawStats(): Promise<unknown[]>;
       /** SFU: remote tracks shown in tiles; must be 2 × (members − 1), no orphans. */
       receivedTracks(): number;
+      /** What the browser's own "Stop sharing" button does to the screen track. */
+      endScreenTrack(): void;
       /** Leak check: both must be 0 after leaving, and members − 1 / ≤ 2 during a call. */
       resources(): { openConnections: number; liveLocalTracks: number };
     };
@@ -45,6 +47,7 @@ if (import.meta.env.DEV) {
       currentSfu?.inboundBytes() ?? currentMesh?.inboundBytes() ?? Promise.resolve({}),
     quality: () => latestQuality,
     rawStats: () => currentMesh?.rawStats() ?? Promise.resolve([]),
+    endScreenTrack: () => currentSfu?.endScreenTrack(),
     receivedTracks: () =>
       [...(currentSfu?.streams.values() ?? [])].reduce((n, s) => n + s.getTracks().length, 0),
     resources: () => ({
@@ -76,6 +79,7 @@ export function useCall() {
   const [mediaError, setMediaError] = useState<string | null>(null);
   const [remotes, setRemotes] = useState<RemotePeer[]>([]);
   const [quality, setQuality] = useState<Record<string, PeerQuality>>({});
+  const [sharing, setSharing] = useState(false);
   const refs = useRef<{ client: SignalingClient; rooms: RoomClient } | null>(null);
   const call = useRef<{
     mesh: MeshCall;
@@ -106,13 +110,15 @@ export function useCall() {
     const shown = view.members.filter(
       (m) => current.loopback || m.participantId !== view.participantId,
     );
+    const { streams } = current.sfu;
     setRemotes(
-      shown.map(({ participantId }) => ({
-        participantId,
-        stream: current.sfu.streams.get(participantId) ?? null,
-        state,
-      })),
+      shown.flatMap(({ participantId }) => {
+        const screen = streams.get(`${participantId}#screen`);
+        const camera = { participantId, stream: streams.get(participantId) ?? null, state };
+        return screen ? [{ participantId, stream: screen, state, screen: true }, camera] : [camera];
+      }),
     );
+    setSharing(current.sfu.sharing);
   }, []);
 
   const endCall = useCallback(() => {
@@ -232,6 +238,24 @@ export function useCall() {
     await refs.current.rooms.setMuted(state);
   }, []);
 
+  /** SFU rooms: share the screen, or stop. Denial or cancel throws; no server call is made. */
+  const toggleScreen = useCallback(async () => {
+    const current = call.current;
+    if (!current?.sfuActive) return;
+    if (current.sfu.sharing) return current.sfu.stopScreen();
+    try {
+      await current.sfu.shareScreen();
+    } catch (err) {
+      if (err instanceof DOMException && err.name === 'NotAllowedError') {
+        throw new Error('Screen sharing was cancelled or not allowed.', { cause: err });
+      }
+      const sharer = /already sharing: (\S+)/.exec(String(err))?.[1];
+      const name = refs.current?.rooms.view?.members.find((m) => m.participantId === sharer);
+      if (!sharer) throw err;
+      throw new Error(`${name?.displayName ?? 'Someone'} is already sharing.`, { cause: err });
+    }
+  }, []);
+
   const leave = useCallback(async () => {
     endCall();
     await refs.current?.rooms.leave();
@@ -248,6 +272,8 @@ export function useCall() {
     quality,
     join,
     toggle,
+    toggleScreen,
+    sharing,
     leave,
   };
 }

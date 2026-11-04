@@ -15,7 +15,7 @@ afterEach(async () => {
 });
 
 const rtp = (kind: 'audio' | 'video', ssrc: number) => ({
-  mid: kind === 'audio' ? '0' : '1',
+  mid: String(ssrc), // unique per Producer on a transport
   codecs: [
     kind === 'audio'
       ? { mimeType: 'audio/opus', payloadType: 111, clockRate: 48_000, channels: 2 }
@@ -201,4 +201,31 @@ test('race: the Producer closes while consume waits for the Worker (both orders)
     await alice.client.ok('room.leave', {});
   }
   console.log(outcomes.join('\n'));
+});
+
+test('one screen sharer per room: the lock is the Producer, released by stop or leave', async () => {
+  const { media, member } = await setup(22_160);
+  const alice = await member();
+  const bob = await member();
+  const carol = await member();
+  const screen = ok<{ producerId: string }>(await alice.produce('video', 'screen')).producerId;
+  ok(await bob.produce('video')); // a camera is not a screen: no conflict
+  const second = await bob.produce('video', 'screen');
+  expect(second).toMatchObject({ ok: false, error: { code: 'CONFLICT' } });
+  expect(second.ok || second.error.message).toContain(alice.id); // who is sharing
+
+  const { consumerId } = ok<{ consumerId: string }>(await carol.consume(screen));
+  expect(await bob.client.request('sfu.closeProducer', { producerId: screen })).toMatchObject({
+    ok: false,
+    error: { code: 'NOT_FOUND' },
+  }); // not Bob's to stop
+  await alice.client.ok('sfu.closeProducer', { producerId: screen });
+  expect(await carol.client.waitForEvent('sfu.consumerClosed')).toMatchObject({
+    payload: { consumerId },
+  });
+
+  ok(await bob.produce('video', 'screen')); // released by stopping
+  bob.client.close(); // released by leaving (here: disconnecting)
+  await expect.poll(() => media.counts().producers).toBe(0); // Bob's camera and screen gone
+  ok(await carol.produce('video', 'screen'));
 });

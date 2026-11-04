@@ -74,6 +74,7 @@ export interface MediaController {
   ): Promise<ConsumerParams>;
   resumeConsumer(participantId: string, consumerId: string): Promise<void>;
   pauseProducer(participantId: string, producerId: string, paused: boolean): Promise<void>;
+  closeProducer(participantId: string, producerId: string): void;
   /** The room's open Producers, for the join snapshot. */
   producers(roomId: string): ProducerInfo[];
   /** Closes the participant's transports (and so its Producers and Consumers). Idempotent. */

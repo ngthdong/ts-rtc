@@ -20,6 +20,7 @@ declare global {
       inboundBytes(): Promise<Bytes>;
       quality(): Record<string, Quality>;
       receivedTracks(): number;
+      endScreenTrack(): void;
       resources(): { openConnections: number; liveLocalTracks: number };
     };
   }
