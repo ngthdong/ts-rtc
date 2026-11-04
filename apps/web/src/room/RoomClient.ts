@@ -52,12 +52,12 @@ export class RoomClient {
   }
 
   private apply(event: SignalingEvent): void {
-    if (event.type === 'mesh.signal') return; // media negotiation is MeshCall's business
     if (event.type === 'room.closed') {
       this.closedReason = event.payload.reason;
       this.set(null);
       return;
     }
+    if (!('roomSeq' in event.payload)) return; // media events: MeshCall's and SfuSession's
     const view = this.current;
     if (!view || event.payload.roomSeq <= view.roomSeq) return; // already in the snapshot
     if (event.payload.roomSeq !== view.roomSeq + 1) {
