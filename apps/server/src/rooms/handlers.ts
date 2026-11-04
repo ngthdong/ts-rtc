@@ -9,7 +9,7 @@ export class RoomRegistry {
   private readonly rooms = new Map<string, Room>();
 
   constructor(
-    private readonly options: RoomOptions,
+    private readonly options: RoomOptions & { sfuCapacity: number },
     private readonly log: FastifyBaseLogger,
     /** Absent: SFU rooms cannot be joined (tests and Mesh-only setups). */
     readonly media: MediaController | undefined,
@@ -38,7 +38,8 @@ export class RoomRegistry {
       this.rooms.delete(closed.id);
       if (closed.mode === 'sfu') this.media?.closeRouter(closed.id);
     };
-    const room = new Room(this.options, this.log, onClosed, mode);
+    const capacity = mode === 'sfu' ? this.options.sfuCapacity : this.options.capacity;
+    const room = new Room({ ...this.options, capacity }, this.log, onClosed, mode);
     this.rooms.set(room.id, room);
     return room;
   }
