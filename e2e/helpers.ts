@@ -11,7 +11,13 @@ export interface Quality {
   outKbps: number | null;
   video: { width: number; height: number; fps: number } | null;
   limitation: string | null;
-  path: { local: string; remote: string; protocol: string; rttMs: number | null } | null;
+  path: {
+    local: string;
+    remote: string;
+    protocol: string;
+    localPort: number | null;
+    rttMs: number | null;
+  } | null;
 }
 
 declare global {
@@ -21,6 +27,8 @@ declare global {
       quality(): Record<string, Quality>;
       receivedTracks(): number;
       endScreenTrack(): void;
+      sendLayers(): Promise<{ rid: string; bytes: number; width: number | null }[]>;
+      receivedWidths(): Promise<Record<string, number>>;
       resources(): { openConnections: number; liveLocalTracks: number };
     };
   }

@@ -11,7 +11,7 @@ import {
 
 test.afterEach(closePages);
 
-const MESH = '/?mode=mesh'; // new rooms default to the SFU since Stage 11
+const MESH = '/?mode=mesh'; // new rooms default to the SFU
 
 test('four browsers in a full mesh: everyone receives everyone; mute is visible', async ({
   browser,
