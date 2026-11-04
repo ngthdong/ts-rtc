@@ -1,7 +1,15 @@
 import { pino, type DestinationStream, type Logger } from 'pino';
 
 /** Never written at any level: credentials, SDP (ICE passwords, addresses), raw candidates. */
-const SECRET_KEYS = ['accessToken', 'password', 'credential', 'sdp', 'candidate'];
+const SECRET_KEYS = [
+  'accessToken',
+  'authorization',
+  'password',
+  'passwordHash',
+  'credential',
+  'sdp',
+  'candidate',
+];
 export const REDACT_PATHS = SECRET_KEYS.flatMap((key) => [key, `*.${key}`, `*.*.${key}`]);
 
 export interface LoggerOptions {
