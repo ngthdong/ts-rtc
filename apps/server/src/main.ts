@@ -39,6 +39,7 @@ const media = await MediasoupController.start(
 
 const app = buildApp(log, {
   media,
+  debugRoutes: config.NODE_ENV !== 'production',
   allowedOrigins: config.ALLOWED_ORIGINS,
   capacity: config.MESH_MAX_PARTICIPANTS,
   // The session id is the pseudonymous userKey in TURN usernames.

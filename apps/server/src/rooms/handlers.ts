@@ -1,4 +1,4 @@
-import { SignalingError, type RoomMode } from '@ts-rtc/protocol';
+import { SignalingError, type LeaveReason, type RoomMode } from '@ts-rtc/protocol';
 import type { FastifyBaseLogger } from 'fastify';
 import type { MediaController } from '../media/media-controller.js';
 import type { RequestRouter } from '../router.js';
@@ -17,6 +17,19 @@ export class RoomRegistry {
     media?.onRouterLost((roomId) => {
       const room = this.rooms.get(roomId);
       if (room) void room.executor.run(() => room.close('media_failure'));
+    });
+    media?.onTransportClosed((roomId, participantId, transportId, reason) => {
+      const room = this.rooms.get(roomId);
+      void room?.executor.run(() => {
+        room.emitTo(participantId, 'sfu.transportClosed', { transportId, reason });
+      });
+    });
+  }
+
+  /** The one leave path (request or disconnect): epoch-checked, then the media goes too. */
+  leave({ room, participantId, epoch }: Binding, reason: LeaveReason): Promise<void> {
+    return room.executor.run(() => {
+      if (room.remove(participantId, epoch, reason)) this.media?.closeParticipant(participantId);
     });
   }
 
@@ -52,8 +65,7 @@ export function registerRoomHandlers(router: RequestRouter, rooms: RoomRegistry)
       });
     })
     .on('room.leave', async (_payload, { session }) => {
-      const { room, participantId, epoch } = requireBinding(session);
-      await room.executor.run(() => room.remove(participantId, epoch, 'left'));
+      await rooms.leave(requireBinding(session), 'left');
       return {};
     })
     .on('room.sync', (_payload, { session }) => {
@@ -78,14 +90,11 @@ export function registerRoomHandlers(router: RequestRouter, rooms: RoomRegistry)
     });
 }
 
-export function leaveOnDisconnect(session: Session): void {
-  const binding = session.binding;
-  if (!binding) return;
-  const { room, participantId, epoch } = binding;
-  void room.executor.run(() => room.remove(participantId, epoch, 'disconnected'));
+export function leaveOnDisconnect(session: Session, rooms: RoomRegistry): void {
+  if (session.binding) void rooms.leave(session.binding, 'disconnected');
 }
 
-function requireBinding(session: Session): Binding {
+export function requireBinding(session: Session): Binding {
   if (!session.binding) throw new SignalingError('INVALID_STATE', 'not in a room');
   return session.binding;
 }

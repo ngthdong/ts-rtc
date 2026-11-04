@@ -4,11 +4,10 @@ import { ServerMessage, type SignalingEvent } from '@ts-rtc/protocol';
 import type { FastifyBaseLogger } from 'fastify';
 import { pino } from 'pino';
 import { WebSocket } from 'ws';
-import { buildApp, type App } from '../src/app.js';
-import type { SignalingOptions } from '../src/signaling.js';
+import { buildApp, type App, type AppOptions } from '../src/app.js';
 
 export async function startServer(
-  options: Partial<SignalingOptions> = {},
+  options: AppOptions = {},
   log: FastifyBaseLogger = pino({ level: 'silent' }),
 ) {
   const app: App = buildApp(log, options);
