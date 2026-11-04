@@ -1,4 +1,4 @@
-// Worker startup time, idle Worker memory, Router creation latency.
+// Worker startup time, idle Worker memory, Router and WebRtcTransport creation latency.
 // Run: pnpm --filter @ts-rtc/server exec tsx bench/media.ts
 import { createWorker } from 'mediasoup';
 import { MEDIA_CODECS } from '../src/media/mediasoup/codecs.js';
@@ -28,6 +28,18 @@ for (let i = 0; i < 1000; i++) {
 }
 creations.sort((a, b) => a - b);
 const after = (await worker.getResourceUsage()).ru_maxrss;
+const router = await worker.createRouter({ mediaCodecs: MEDIA_CODECS });
+const webRtcServer = await worker.createWebRtcServer({
+  listenInfos: [{ protocol: 'udp', ip: '127.0.0.1', port: 44_444 }],
+});
+const transports: number[] = [];
+for (let i = 0; i < 1000; i++) {
+  const startedAt = performance.now();
+  const transport = await router.createWebRtcTransport({ webRtcServer });
+  transports.push(performance.now() - startedAt);
+  transport.close();
+}
+transports.sort((a, b) => a - b);
 worker.close();
 
 console.log(
@@ -38,4 +50,7 @@ console.log(
 );
 console.log(
   `createRouter (1000): p50 ${ms(quantile(creations, 0.5))}, p99 ${ms(quantile(creations, 0.99))}, max ${ms(creations.at(-1) ?? NaN)}`,
+);
+console.log(
+  `createWebRtcTransport (1000): p50 ${ms(quantile(transports, 0.5))}, p99 ${ms(quantile(transports, 0.99))}`,
 );

@@ -7,6 +7,7 @@ import { afterEach, expect, test } from 'vitest';
 import type { App } from '../src/app.js';
 import type { MediaController } from '../src/media/media-controller.js';
 import { MediasoupController } from '../src/media/mediasoup/mediasoup-controller.js';
+import type { TransportOptions } from '../src/media/mediasoup/transport-service.js';
 import type { WorkerPoolOptions } from '../src/media/mediasoup/worker-pool.js';
 import { startServer, TestClient } from './helpers.js';
 
@@ -14,13 +15,17 @@ import { startServer, TestClient } from './helpers.js';
 // may still be closing when the next test starts. All below 32768: Linux hands out client ports
 // from 32768 up, and a test's own WebSocket on one of them would make the Worker's bind fail.
 const silent = pino({ level: 'silent' });
-const options = (portBase: number, extra: Partial<WorkerPoolOptions> = {}) => ({
+type MediaOptions = WorkerPoolOptions & TransportOptions;
+const options = (portBase: number, extra: Partial<MediaOptions> = {}): MediaOptions => ({
   count: 2,
   listenIp: '127.0.0.1',
   announcedAddress: undefined,
   portBase,
   restartDelayMs: 50,
   maxRestartsPerMinute: 5,
+  allowLoopback: true,
+  connectDeadlineMs: 30_000,
+  iceDisconnectedMs: 30_000,
   ...extra,
 });
 
@@ -32,7 +37,7 @@ afterEach(async () => {
   app = media = undefined;
 });
 
-async function startMedia(portBase: number, extra: Partial<WorkerPoolOptions> = {}) {
+async function startMedia(portBase: number, extra: Partial<MediaOptions> = {}) {
   const controller = await MediasoupController.start(options(portBase, extra), silent);
   media = controller;
   return controller;

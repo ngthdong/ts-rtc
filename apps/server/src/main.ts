@@ -30,6 +30,9 @@ const media = await MediasoupController.start(
     portBase: config.MEDIA_PORT_BASE,
     restartDelayMs: 2_000,
     maxRestartsPerMinute: 5,
+    allowLoopback: config.ALLOW_LOOPBACK ?? config.NODE_ENV !== 'production',
+    connectDeadlineMs: 30_000,
+    iceDisconnectedMs: 30_000,
   },
   log,
 );
