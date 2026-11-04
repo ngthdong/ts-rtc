@@ -54,7 +54,6 @@ const TRANSITIONS: Record<RoomState, readonly RoomState[]> = {
  * so a task cannot be interleaved with another one halfway through.
  */
 export class Room {
-  readonly id = randomUUID();
   readonly executor = new SerialExecutor();
   state: RoomState = 'created';
   roomSeq = 0;
@@ -66,6 +65,8 @@ export class Room {
   private timer: NodeJS.Timeout | undefined;
 
   constructor(
+    /** The durable room's id (POST /api/rooms): the live call lives under the same id. */
+    readonly id: string,
     private readonly options: RoomOptions,
     log: FastifyBaseLogger,
     private readonly onClosed: (room: Room) => void,
@@ -155,7 +156,7 @@ export class Room {
   }
 
   /** Ends the room for everyone at once; members are unbound and told why. Idempotent. */
-  close(reason: 'media_failure'): void {
+  close(reason: EventPayload<'room.closed'>['reason']): void {
     if (this.state === 'closed') return;
     for (const participant of this.participants.values()) {
       if (participant.peer.binding?.room === this) participant.peer.binding = undefined;

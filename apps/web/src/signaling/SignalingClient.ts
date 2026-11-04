@@ -35,6 +35,8 @@ export const initialSnapshot: SignalingSnapshot = {
 
 export interface SignalingClientOptions {
   requestTimeoutMs?: number;
+  /** Sent in session.hello; without a valid one the server closes with 4401. */
+  accessToken?: string | undefined;
   createSocket?: (url: string) => WebSocket;
 }
 
@@ -51,6 +53,7 @@ const MAX_MISSED_HEARTBEATS = 2;
 export class SignalingClient {
   private readonly ws: WebSocket;
   private readonly requestTimeoutMs: number;
+  private readonly accessToken: string | undefined;
   private readonly pending = new Map<string, Pending>();
   private readonly listeners = new Set<() => void>();
   private readonly eventListeners = new Set<(event: SignalingEvent) => void>();
@@ -62,6 +65,7 @@ export class SignalingClient {
 
   constructor(url: string, options: SignalingClientOptions = {}) {
     this.requestTimeoutMs = options.requestTimeoutMs ?? 5_000;
+    this.accessToken = options.accessToken;
     this.ws = (options.createSocket ?? ((u) => new WebSocket(u)))(url);
     this.ws.onopen = () => {
       void this.greet();
@@ -122,7 +126,10 @@ export class SignalingClient {
 
   private async greet(): Promise<void> {
     try {
-      const welcome = await this.request('session.hello', { protocolVersions: [PROTOCOL_VERSION] });
+      const welcome = await this.request('session.hello', {
+        protocolVersions: [PROTOCOL_VERSION],
+        ...(this.accessToken && { accessToken: this.accessToken }),
+      });
       const { sessionId, iceServers } = welcome;
       this.update({ status: 'ready', sessionId, iceServers });
       this.heartbeat = setInterval(() => {

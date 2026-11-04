@@ -9,7 +9,7 @@ import type { MediaController } from '../src/media/media-controller.js';
 import { MediasoupController } from '../src/media/mediasoup/mediasoup-controller.js';
 import type { TransportOptions } from '../src/media/mediasoup/transport-service.js';
 import type { WorkerPoolOptions } from '../src/media/mediasoup/worker-pool.js';
-import { startServer, TestClient } from './helpers.js';
+import { startServer, TestClient, type TestDirectory } from './helpers.js';
 
 // Real mediasoup-worker processes. Each test uses its own ports: a killed Worker's sockets
 // may still be closing when the next test starts. All below 32768: Linux hands out client ports
@@ -43,10 +43,12 @@ async function startMedia(portBase: number, extra: Partial<MediaOptions> = {}) {
   return controller;
 }
 
+let directory: TestDirectory;
 /** Starts the signaling server (with `media` if given); returns its host. */
 async function serve(opts: Parameters<typeof startServer>[0] = {}): Promise<string> {
   const server = await startServer(opts);
   app = server.app;
+  directory = server.directory;
   return server.host;
 }
 
@@ -126,10 +128,10 @@ test('SFU join returns the Router capabilities; two first joins at once make one
   const server = await serve({ media: m });
   const alice = await TestClient.greeted(server);
   const bob = await TestClient.greeted(server);
-  const { roomId } = await alice.ok<{ roomId: string }>('room.create', { mode: 'sfu' });
+  const roomId = directory.create('sfu');
   const [a, b] = await Promise.all([
-    alice.ok<RoomSnapshot>('room.join', { roomId, displayName: 'A' }),
-    bob.ok<RoomSnapshot>('room.join', { roomId, displayName: 'B' }),
+    alice.ok<RoomSnapshot>('room.join', { roomId }),
+    bob.ok<RoomSnapshot>('room.join', { roomId }),
   ]);
   expect(a.mode).toBe('sfu');
   expect(a.routerRtpCapabilities).toEqual(b.routerRtpCapabilities);
@@ -141,8 +143,8 @@ test('a room that closes (empty grace over) closes its Router', async () => {
   const m = await startMedia(21_060);
   const server = await serve({ media: m, emptyGraceMs: 50 });
   const alice = await TestClient.greeted(server);
-  const { roomId } = await alice.ok<{ roomId: string }>('room.create', { mode: 'sfu' });
-  await alice.ok('room.join', { roomId, displayName: 'A' });
+  const roomId = directory.create('sfu');
+  await alice.ok('room.join', { roomId });
   expect(await routerCounts(m)).toEqual([1, 0]);
   await alice.ok('room.leave', {});
   await expect.poll(() => routerCounts(m)).toEqual([0, 0]);
@@ -153,10 +155,10 @@ test('a dead Worker closes only its rooms, members are told, and a replacement s
   const server = await serve({ media: m });
   const alice = await TestClient.greeted(server);
   const bob = await TestClient.greeted(server);
-  const roomA = (await alice.ok<{ roomId: string }>('room.create', { mode: 'sfu' })).roomId;
-  const roomB = (await bob.ok<{ roomId: string }>('room.create', { mode: 'sfu' })).roomId;
-  await alice.ok('room.join', { roomId: roomA, displayName: 'A' }); // Worker 0
-  await bob.ok('room.join', { roomId: roomB, displayName: 'B' }); // Worker 1
+  const roomA = directory.create('sfu');
+  const roomB = directory.create('sfu');
+  await alice.ok('room.join', { roomId: roomA }); // Worker 0
+  await bob.ok('room.join', { roomId: roomB }); // Worker 1
   const [first, second] = await m.inspect();
 
   kill(first?.pid);
@@ -198,8 +200,8 @@ test('a crash loop (6 deaths in a minute) stops restarts and makes /readyz answe
 test('without a media controller, SFU rooms cannot be joined', async () => {
   const server = await serve();
   const alice = await TestClient.greeted(server);
-  const { roomId } = await alice.ok<{ roomId: string }>('room.create', { mode: 'sfu' });
-  expect(await alice.request('room.join', { roomId, displayName: 'A' })).toMatchObject({
+  const roomId = directory.create('sfu');
+  expect(await alice.request('room.join', { roomId })).toMatchObject({
     ok: false,
     error: { code: 'UNAVAILABLE', retryable: true },
   });

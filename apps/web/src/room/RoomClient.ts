@@ -1,4 +1,4 @@
-import type { MuteState, RoomMode, RoomSnapshot, SignalingEvent } from '@ts-rtc/protocol';
+import type { MuteState, RoomSnapshot, SignalingEvent } from '@ts-rtc/protocol';
 import type { SignalingClient } from '../signaling/SignalingClient.js';
 
 export class RoomClient {
@@ -26,16 +26,12 @@ export class RoomClient {
     };
   }
 
-  async create(mode: RoomMode = 'mesh'): Promise<string> {
-    const { roomId } = await this.signaling.request('room.create', { mode });
-    return roomId;
-  }
-
-  async join(roomId: string, displayName: string): Promise<void> {
+  /** Joins with the account's display name (rooms are created over HTTP, POST /api/rooms). */
+  async join(roomId: string): Promise<void> {
     this.held = [];
     this.closedReason = null;
     try {
-      this.set(await this.signaling.request('room.join', { roomId, displayName }));
+      this.set(await this.signaling.request('room.join', { roomId }));
       for (const event of this.held) this.apply(event);
     } finally {
       this.held = null;

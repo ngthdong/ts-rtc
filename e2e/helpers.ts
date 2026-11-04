@@ -48,16 +48,36 @@ export async function closePages(): Promise<void> {
   await Promise.all(contexts.splice(0).map((context) => context.close()));
 }
 
+/** Opens the app: the login page (a new context is signed out), or the call page, ready. */
 export async function openApp(browser: Browser, path = '/'): Promise<Page> {
   const page = await newPage(browser);
   await page.goto(path);
-  await expect(page.getByTestId('status')).toHaveText('ready');
+  const ready = page.getByTestId('status').filter({ hasText: 'ready' });
+  await expect(page.getByRole('heading', { name: 'Sign in' }).or(ready)).toBeVisible();
   return page;
 }
 
-/** Joins `roomId`, or creates a room when it is null; returns the room id. */
+export const PASSWORD = 'correct horse battery staple';
+
+/** Creates an account named `name` (a fresh email each time) and signs in; returns the email. */
+export async function signUp(page: Page, name: string): Promise<string> {
+  const email = `${name.toLowerCase()}-${crypto.randomUUID().slice(0, 8)}@example.test`;
+  await page.getByLabel('Email').fill(email);
+  await page.getByLabel('Password').fill(PASSWORD);
+  await page.getByLabel('Display name (new accounts)').fill(name);
+  await page.getByRole('button', { name: 'Create account' }).click();
+  await expect(page.getByTestId('status')).toHaveText('ready');
+  return email;
+}
+
+/** Signs up as `name` if the page shows the login form; the display name is the account's. */
+export async function signedIn(page: Page, name: string): Promise<void> {
+  if (await page.getByRole('heading', { name: 'Sign in' }).isVisible()) await signUp(page, name);
+}
+
+/** Joins `roomId`, or creates a room when it is null; returns the room id. Signs up if needed. */
 export async function join(page: Page, name: string, roomId: string | null): Promise<string> {
-  await page.getByLabel('Your name').fill(name);
+  await signedIn(page, name);
   if (roomId) {
     await page.getByLabel('Room ID').fill(roomId);
     await page.getByRole('button', { name: 'Join' }).click();

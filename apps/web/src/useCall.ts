@@ -1,5 +1,6 @@
-import type { MuteState, RoomMode, RoomSnapshot } from '@ts-rtc/protocol';
+import { CloseCode, type MuteState, type RoomMode, type RoomSnapshot } from '@ts-rtc/protocol';
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { accessToken, api, signOut } from './auth/session.js';
 import { getLocalMedia, getTrack, liveLocalTracks, stopTracks } from './media/localMedia.js';
 import { MeshCall, type RemotePeer } from './mesh/MeshCall.js';
 import { countOpenConnections } from './mesh/PeerSession.js';
@@ -41,6 +42,7 @@ const simulcast = params.get('simulcast') !== 'off';
 
 export interface JoinOptions {
   mode?: RoomMode; // for a new room
+  visibility?: 'public' | 'private'; // for a new room: private ones admit added members only
   loopback?: boolean; // SFU diagnostics: also receive yourself back
 }
 
@@ -137,12 +139,16 @@ export function useCall() {
   }, [stopCall]);
 
   useEffect(() => {
-    const client = new SignalingClient(signalingUrl());
+    const client = new SignalingClient(signalingUrl(), {
+      accessToken: accessToken.get() ?? undefined,
+    });
     const rooms = new RoomClient(client);
     refs.current = { client, rooms };
     const unsubscribe = [
       client.subscribe(() => {
         setConnection(client.snapshot);
+        // The token expired or was rejected: back to the login page.
+        if (client.snapshot.closeCode === CloseCode.Unauthenticated) signOut();
       }),
       rooms.subscribe(() => {
         setRoom(rooms.view);
@@ -164,10 +170,19 @@ export function useCall() {
 
   /** Joins `roomId`, or a new room when it is null. Media is acquired before joining. */
   const join = useCallback(
-    async (roomId: string | null, displayName: string, options: JoinOptions = {}) => {
+    async (roomId: string | null, options: JoinOptions = {}): Promise<string | undefined> => {
       if (!refs.current) return;
       const { client, rooms } = refs.current;
-      const target = roomId ?? (await rooms.create(options.mode ?? defaultMode));
+      // A new room is a durable one (POST /api/rooms), owned by this account.
+      const target =
+        roomId ??
+        (
+          await api<{ id: string }>('POST', '/api/rooms', {
+            name: 'Call',
+            visibility: options.visibility ?? 'public',
+            mode: options.mode ?? defaultMode,
+          })
+        ).id;
       const media = await getLocalMedia();
       setLocal(media.stream);
       setMediaError(media.error);
@@ -200,7 +215,7 @@ export function useCall() {
         setRemotes(mesh.view);
       });
       try {
-        await rooms.join(target, displayName);
+        await rooms.join(target);
         const view = rooms.view;
         if (view?.mode === 'mesh') mesh.start(view);
         if (view?.mode === 'sfu') {
@@ -212,6 +227,7 @@ export function useCall() {
         const state = muteState(media.stream);
         setMuted(state);
         if (state.audioMuted || state.videoMuted) await rooms.setMuted(state);
+        return target;
       } catch (err) {
         endCall();
         throw err;

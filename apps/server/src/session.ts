@@ -9,6 +9,7 @@ import {
 } from '@ts-rtc/protocol';
 import type { FastifyBaseLogger } from 'fastify';
 import { WebSocket, type RawData } from 'ws';
+import type { User } from './db/users.js';
 import type { Binding, Peer } from './rooms/room.js';
 import type { Outcome, RequestRouter } from './router.js';
 
@@ -25,6 +26,8 @@ export class Session implements Peer {
   readonly id = randomUUID();
   readonly log: FastifyBaseLogger;
   greeted = false;
+  /** Set by session.hello from the access token; every greeted session has one. */
+  user: User | undefined;
   binding: Binding | undefined;
   private seq = 0;
   private readonly closeListeners: (() => void)[] = [];

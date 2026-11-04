@@ -1,11 +1,17 @@
 import { availableParallelism } from 'node:os';
 import { buildApp } from './app.js';
+import { postgresDirectory } from './auth/directory.js';
+import { Tokens } from './auth/tokens.js';
 import { loadConfig } from './config.js';
+import { createPool, migrate } from './db/pool.js';
+import { RateLimiter } from './http/rate-limit.js';
 import { createLogger } from './logger.js';
 import { MediasoupController } from './media/mediasoup/mediasoup-controller.js';
 import { mintTurnCredentials } from './turn/credentials.js';
 
 const SHUTDOWN_TIMEOUT_MS = 10_000;
+/** Development only: config.ts refuses to start production without JWT_SECRET. */
+const DEV_JWT_SECRET = 'development-only-secret-never-use-in-production';
 
 const config = loadConfig();
 
@@ -13,6 +19,18 @@ const log = createLogger({
   level: config.LOG_LEVEL,
   env: config.NODE_ENV,
   version: config.APP_VERSION,
+});
+
+// Postgres first: without it nobody can sign in, so fail at startup, not at the first request.
+const db = createPool(config.DATABASE_URL);
+const applied = await migrate(db);
+log.info({ applied }, 'db.migrated');
+if (!config.JWT_SECRET) log.warn('JWT_SECRET not set: using the development secret');
+const tokens = new Tokens({
+  secret: config.JWT_SECRET ?? DEV_JWT_SECRET,
+  issuer: 'ts-rtc',
+  audience: 'ts-rtc',
+  ttlSeconds: 12 * 3600,
 });
 
 const turn = config.TURN_SECRET
@@ -43,7 +61,13 @@ const app = buildApp(log, {
   allowedOrigins: config.ALLOWED_ORIGINS,
   capacity: config.MESH_MAX_PARTICIPANTS,
   sfuCapacity: config.SFU_MAX_PARTICIPANTS,
-  // The session id is the pseudonymous userKey in TURN usernames.
+  directory: postgresDirectory(db, tokens),
+  api: {
+    db,
+    tokens,
+    limiter: new RateLimiter(config.AUTH_RATE_PER_MINUTE, config.AUTH_RATE_PER_MINUTE),
+  },
+  // The user id is the userKey in TURN usernames.
   iceServersFor: (userKey) => [
     ...config.ICE_SERVERS,
     ...(turn ? [mintTurnCredentials(turn, userKey)] : []),
@@ -60,16 +84,19 @@ function shutdown(signal: NodeJS.Signals): void {
     log.error('shutdown.timeout');
     process.exit(1);
   }, SHUTDOWN_TIMEOUT_MS).unref();
-  app.close().then(
-    () => {
-      log.info({ durationMs: Date.now() - startedAt }, 'shutdown.complete');
-      process.exit(0);
-    },
-    (err: unknown) => {
-      log.error({ err }, 'shutdown.failed');
-      process.exit(1);
-    },
-  );
+  app
+    .close()
+    .then(() => db.end()) // the pool last: no request can need it any more
+    .then(
+      () => {
+        log.info({ durationMs: Date.now() - startedAt }, 'shutdown.complete');
+        process.exit(0);
+      },
+      (err: unknown) => {
+        log.error({ err }, 'shutdown.failed');
+        process.exit(1);
+      },
+    );
 }
 process.once('SIGINT', shutdown);
 process.once('SIGTERM', shutdown);
