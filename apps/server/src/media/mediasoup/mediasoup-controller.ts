@@ -29,8 +29,11 @@ export class MediasoupController implements MediaController {
   readonly connectTransport: MediaController['connectTransport'];
   readonly produce: MediaController['produce'];
   readonly consume: MediaController['consume'];
+  readonly resumeConsumer: MediaController['resumeConsumer'];
+  readonly pauseProducer: MediaController['pauseProducer'];
+  readonly producers: MediaController['producers'];
   readonly closeParticipant: MediaController['closeParticipant'];
-  readonly onTransportClosed: MediaController['onTransportClosed'];
+  readonly onEvent: MediaController['onEvent'];
   readonly counts: MediaController['counts'];
 
   private constructor(
@@ -44,8 +47,11 @@ export class MediasoupController implements MediaController {
     this.connectTransport = transports.connect.bind(transports);
     this.produce = transports.produce.bind(transports);
     this.consume = transports.consume.bind(transports);
+    this.resumeConsumer = transports.resumeConsumer.bind(transports);
+    this.pauseProducer = transports.pauseProducer.bind(transports);
+    this.producers = transports.producers.bind(transports);
     this.closeParticipant = transports.closeParticipant.bind(transports);
-    this.onTransportClosed = transports.onClosed.bind(transports);
+    this.onEvent = transports.onEvent.bind(transports);
     this.counts = transports.counts.bind(transports);
   }
 

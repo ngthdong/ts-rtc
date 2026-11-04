@@ -1,12 +1,13 @@
-import { SignalingError } from '@ts-rtc/protocol';
+import { SignalingError, type ProducerInfo, type ProducerSource } from '@ts-rtc/protocol';
 import type { FastifyBaseLogger } from 'fastify';
-import type { types } from 'mediasoup';
+import { errors, type types } from 'mediasoup';
 import type {
   ConsumerParams,
   Direction,
   Json,
   MediaController,
   MediaCounts,
+  MediaEvent,
   MediaKind,
   TransportCloseReason,
   TransportParams,
@@ -21,23 +22,27 @@ export interface TransportOptions {
   iceDisconnectedMs: number;
 }
 
-const MAX_PRODUCERS = 3; // microphone, camera, screen
+/** Audio + video of up to 9 others, plus 2 screens later (2 × (10 − 1) + 2). */
+const MAX_CONSUMERS = 20;
 
+/** Everything one participant owns; only the owner may use it. */
 interface Party {
   roomId: string;
   transports: Map<string, types.WebRtcTransport>;
   connected: Set<string>;
-  producers: number;
+  producers: Map<ProducerSource, types.Producer>;
+  consumers: Map<string, types.Consumer>;
 }
 
-type ClosedListener = Parameters<MediaController['onTransportClosed']>[0];
+type Listener = Parameters<MediaController['onEvent']>[0];
 
 /** Each participant's transports, Producers and Consumers, and who may use which. */
 export class TransportService {
   private readonly parties = new Map<string, Party>();
-  private readonly producers = new Map<string, { roomId: string; participantId: string }>();
+  /** Every open Producer, by id: what consume looks up (room check, owner). */
+  private readonly producerIndex = new Map<string, { roomId: string; info: ProducerInfo }>();
   private readonly live: MediaCounts = { transports: 0, producers: 0, consumers: 0 };
-  private readonly closedListeners: ClosedListener[] = [];
+  private readonly listeners: Listener[] = [];
 
   constructor(
     private readonly options: TransportOptions,
@@ -48,8 +53,12 @@ export class TransportService {
     return { ...this.live };
   }
 
-  onClosed(listener: ClosedListener): void {
-    this.closedListeners.push(listener);
+  onEvent(listener: Listener): void {
+    this.listeners.push(listener);
+  }
+
+  producers(roomId: string): ProducerInfo[] {
+    return [...this.producerIndex.values()].filter((p) => p.roomId === roomId).map((p) => p.info);
   }
 
   async create(
@@ -63,7 +72,8 @@ export class TransportService {
       roomId,
       transports: new Map(),
       connected: new Set(),
-      producers: 0,
+      producers: new Map(),
+      consumers: new Map(),
     };
     this.parties.set(participantId, party);
     for (const existing of party.transports.values()) {
@@ -113,31 +123,36 @@ export class TransportService {
     participantId: string,
     transportId: string,
     kind: MediaKind,
+    source: ProducerSource,
     rtpParameters: Json,
-  ): Promise<string> {
+  ): Promise<ProducerInfo> {
     const { party, transport } = this.owned(participantId, transportId, 'send');
-    if (party.producers >= MAX_PRODUCERS) {
-      throw new SignalingError('CAPACITY_EXCEEDED', `at most ${String(MAX_PRODUCERS)} producers`);
+    if ((source === 'mic') !== (kind === 'audio')) {
+      throw new SignalingError('INVALID_PAYLOAD', 'mic is audio, camera is video');
     }
+    const existing = party.producers.get(source);
+    if (existing) throw new SignalingError('CONFLICT', `${source} producer exists: ${existing.id}`);
     let producer: types.Producer;
     try {
       producer = await transport.produce({
         kind,
         rtpParameters: rtpParameters as unknown as types.RtpParameters,
+        appData: { participantId, source },
       });
     } catch {
       throw new SignalingError('INVALID_PAYLOAD', 'rtpParameters rejected');
     }
-    party.producers += 1;
+    const info = { producerId: producer.id, participantId, kind, source };
+    party.producers.set(source, producer);
+    this.producerIndex.set(producer.id, { roomId: party.roomId, info });
     this.live.producers += 1;
-    this.producers.set(producer.id, { roomId: party.roomId, participantId });
     producer.observer.once('close', () => {
-      party.producers -= 1;
+      party.producers.delete(source);
+      this.producerIndex.delete(producer.id);
       this.live.producers -= 1;
-      this.producers.delete(producer.id);
     });
-    this.log.info({ participantId, producerId: producer.id, kind }, 'producer.created');
-    return producer.id;
+    this.log.info({ participantId, producerId: producer.id, kind, source }, 'producer.created');
+    return info;
   }
 
   async consume(
@@ -147,25 +162,63 @@ export class TransportService {
     rtpCapabilities: Json,
   ): Promise<ConsumerParams> {
     const { party, transport } = this.owned(participantId, transportId, 'recv');
-    const source = this.producers.get(producerId);
+    const source = this.producerIndex.get(producerId);
     if (source?.roomId !== party.roomId) {
       throw new SignalingError('NOT_FOUND', 'no such producer in this room');
     }
-    if (source.participantId === participantId && !this.options.allowLoopback) {
+    if (source.info.participantId === participantId && !this.options.allowLoopback) {
       throw new SignalingError('FORBIDDEN', 'consuming your own producer is diagnostics only');
+    }
+    for (const existing of party.consumers.values()) {
+      if (existing.producerId === producerId) {
+        throw new SignalingError('CONFLICT', `already consuming it: ${existing.id}`);
+      }
+    }
+    if (party.consumers.size >= MAX_CONSUMERS) {
+      throw new SignalingError('CAPACITY_EXCEEDED', `at most ${String(MAX_CONSUMERS)} consumers`);
     }
     let consumer: types.Consumer;
     try {
-      consumer = await transport.consume({ producerId, rtpCapabilities });
-    } catch {
-      throw new SignalingError('INVALID_STATE', 'this device cannot receive that producer');
+      consumer = await transport.consume({ producerId, rtpCapabilities, paused: true });
+    } catch (err) {
+      this.log.warn({ participantId, producerId, err }, 'consumer.create_failed');
+      // The Producer may have closed while we waited for the Worker.
+      if (err instanceof errors.NotFoundError || !this.producerIndex.has(producerId)) {
+        throw new SignalingError('NOT_FOUND', 'that producer just closed');
+      }
+      if (err instanceof TypeError) {
+        throw new SignalingError('INVALID_STATE', 'CODEC_INCOMPATIBLE: cannot receive it');
+      }
+      throw new SignalingError('UNAVAILABLE', 'media server error, retry');
     }
+    const { id: consumerId, kind, rtpParameters, producerPaused } = consumer;
+    party.consumers.set(consumerId, consumer);
     this.live.consumers += 1;
     consumer.observer.once('close', () => {
+      party.consumers.delete(consumerId);
       this.live.consumers -= 1;
     });
-    const { id: consumerId, kind, rtpParameters } = consumer;
-    return { consumerId, producerId, kind, rtpParameters };
+    // mediasoup closes the Consumer itself; the client must hear about it.
+    consumer.on('producerclose', () => {
+      this.emit(party.roomId, participantId, {
+        type: 'sfu.consumerClosed',
+        payload: { consumerId, reason: 'producer_closed' },
+      });
+    });
+    return { consumerId, producerId, kind, rtpParameters, producerPaused };
+  }
+
+  async resumeConsumer(participantId: string, consumerId: string): Promise<void> {
+    const consumer = this.parties.get(participantId)?.consumers.get(consumerId);
+    if (!consumer) throw new SignalingError('NOT_FOUND', 'no such consumer');
+    await consumer.resume();
+  }
+
+  async pauseProducer(participantId: string, producerId: string, paused: boolean): Promise<void> {
+    const own = [...(this.parties.get(participantId)?.producers.values() ?? [])];
+    const producer = own.find((p) => p.id === producerId);
+    if (!producer) throw new SignalingError('NOT_FOUND', 'no such producer');
+    await (paused ? producer.pause() : producer.resume());
   }
 
   closeParticipant(participantId: string): void {
@@ -179,6 +232,10 @@ export class TransportService {
     for (const [participantId, party] of this.parties) {
       if (party.roomId === roomId) this.parties.delete(participantId);
     }
+  }
+
+  private emit(roomId: string, participantId: string, event: MediaEvent): void {
+    for (const listener of this.listeners) listener(roomId, participantId, event);
   }
 
   /** The caller's own transport, of the right direction. Others' look like they don't exist. */
@@ -203,9 +260,10 @@ export class TransportService {
       if (transport.closed) return;
       log.warn({ reason }, 'transport.closing');
       transport.close();
-      for (const listener of this.closedListeners) {
-        listener(roomId, participantId, transport.id, reason);
-      }
+      this.emit(roomId, participantId, {
+        type: 'sfu.transportClosed',
+        payload: { transportId: transport.id, reason },
+      });
     };
     const deadline = setTimeout(() => {
       if (transport.dtlsState !== 'connected') close('connect_timeout');

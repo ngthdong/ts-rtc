@@ -15,7 +15,7 @@ beforeEach(async () => {
 afterEach(() => app.close());
 
 async function createRoom(client: TestClient): Promise<string> {
-  return (await client.ok<{ roomId: string }>('room.create', {})).roomId;
+  return (await client.ok<{ roomId: string }>('room.create', { mode: 'mesh' })).roomId;
 }
 
 test('two clients see each other join and leave', async () => {

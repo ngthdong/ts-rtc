@@ -37,7 +37,7 @@ afterEach(async () => {
 
 async function joined(host: string) {
   const client = await TestClient.greeted(host);
-  const { roomId } = await client.ok<{ roomId: string }>('room.create', {});
+  const { roomId } = await client.ok<{ roomId: string }>('room.create', { mode: 'mesh' });
   const snapshot = await client.ok<RoomSnapshot>('room.join', { roomId, displayName: 'A' });
   return { client, snapshot };
 }

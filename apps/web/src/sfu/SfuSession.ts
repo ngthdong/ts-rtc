@@ -56,6 +56,8 @@ export class SfuSession {
         rtpParameters: consumer.rtpParameters as unknown as types.RtpParameters,
       });
       received.addTrack(echo);
+      // Consumers start paused on the server: resume once the track is attached.
+      await this.signaling.request('sfu.resumeConsumer', { consumerId: consumer.consumerId });
     }
     return received;
   }
@@ -105,8 +107,9 @@ export class SfuSession {
         }, fail);
     });
     transport.on('produce', ({ kind, rtpParameters }, done, fail) => {
+      const source = kind === 'audio' ? 'mic' : 'camera';
       this.signaling
-        .request('sfu.produce', { transportId: transport.id, kind, rtpParameters })
+        .request('sfu.produce', { transportId: transport.id, kind, source, rtpParameters })
         .then(({ producerId }) => {
           done({ id: producerId });
         }, fail);

@@ -120,12 +120,14 @@ test('produce on send, consume on recv, in the same room only; own Producer only
     await alice.client.request('sfu.produce', {
       transportId: recv.transportId,
       kind: 'audio',
+      source: 'mic',
       rtpParameters: opus,
     }),
   ).toMatchObject({ ok: false, error: { code: 'INVALID_STATE' } }); // not a send transport
   const { producerId } = await alice.client.ok<{ producerId: string }>('sfu.produce', {
     transportId: send.transportId,
     kind: 'audio',
+    source: 'mic',
     rtpParameters: opus,
   });
 
@@ -157,6 +159,7 @@ test('leaving, disconnecting and Worker death all bring the counts back to zero'
     const { producerId } = await who.client.ok<{ producerId: string }>('sfu.produce', {
       transportId: send.transportId,
       kind: 'audio',
+      source: 'mic',
       rtpParameters: opus,
     });
     await who.client.ok('sfu.consume', {
@@ -212,7 +215,7 @@ test('SFU requests outside an SFU room are refused', async () => {
   const { join } = await setup(22_060);
   const { client } = await join();
   await client.ok('room.leave', {});
-  const { roomId } = await client.ok<{ roomId: string }>('room.create', {}); // mesh
+  const { roomId } = await client.ok<{ roomId: string }>('room.create', { mode: 'mesh' });
   await client.ok('room.join', { roomId, displayName: 'M' });
   expect(await client.request('sfu.createTransport', { direction: 'send' })).toMatchObject({
     ok: false,

@@ -185,7 +185,7 @@ export class Room {
     };
   }
 
-  private broadcast<T extends EventType>(type: T, payload: EventPayload<T>, except?: string): void {
+  broadcast<T extends EventType>(type: T, payload: EventPayload<T>, except?: string): void {
     for (const participant of this.participants.values()) {
       if (participant.id !== except) participant.peer.emit(type, payload);
     }
