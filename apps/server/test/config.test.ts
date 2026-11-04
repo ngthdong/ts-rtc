@@ -20,6 +20,8 @@ test('uses defaults when nothing is set', () => {
       'turn:127.0.0.1:3478?transport=tcp',
     ],
     TURN_TTL_SECONDS: 14_400,
+    DATABASE_URL: 'postgres://ts_rtc:ts_rtc@127.0.0.1:5432/ts_rtc',
+    AUTH_RATE_PER_MINUTE: 10,
   });
 });
 
@@ -44,4 +46,11 @@ test('parses ICE_SERVERS as JSON and rejects anything else', () => {
 test('a TURN secret must be long enough to resist guessing', () => {
   expect(() => loadConfig({ TURN_SECRET: 'short' })).toThrow(/Invalid configuration/);
   expect(loadConfig({ TURN_SECRET: 'x'.repeat(32) }).TURN_SECRET).toHaveLength(32);
+});
+
+test('production needs its own JWT secret, at least 32 characters', () => {
+  expect(() => loadConfig({ NODE_ENV: 'production' })).toThrow(/JWT_SECRET/);
+  expect(() => loadConfig({ JWT_SECRET: 'short' })).toThrow(/Invalid configuration/);
+  const secret = 'x'.repeat(32);
+  expect(loadConfig({ NODE_ENV: 'production', JWT_SECRET: secret }).JWT_SECRET).toBe(secret);
 });
