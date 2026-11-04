@@ -15,12 +15,12 @@ const sourceOf = (kind: string): ProducerSource => (kind === 'audio' ? 'mic' : '
  */
 export class SfuSession {
   readonly states: Record<Direction, string> = { send: 'new', recv: 'new' };
-  /** Received media per participant: tiles are keyed by participant, tracks by Consumer. */
+  /** Received media per tile: `participantId` (mic + camera) or `participantId#screen`. */
   readonly streams = new Map<string, MediaStream>();
   private readonly device = new Device();
   private readonly transports = new Map<Direction, types.Transport>();
   private readonly producers = new Map<ProducerSource, types.Producer>();
-  private readonly consumers = new Map<string, { consumer: types.Consumer; owner: string }>();
+  private readonly consumers = new Map<string, { consumer: types.Consumer; tile: string }>();
   private readonly stats = new StatsCollector();
   private held: ProducerInfo[] | null = [];
   private readonly unsubscribe: () => void;
@@ -57,13 +57,62 @@ export class SfuSession {
   }
 
   /** A device turned on mid-call (camera denied at join): a new Producer, announced to all. */
-  async produce(track: MediaStreamTrack): Promise<types.Producer> {
+  async produce(
+    track: MediaStreamTrack,
+    source = sourceOf(track.kind),
+    encodings?: RTCRtpEncodingParameters[],
+  ): Promise<types.Producer> {
     const send = this.transports.get('send');
     if (!send) throw new Error('no send transport');
-    const source = sourceOf(track.kind);
-    const producer = await send.produce({ track, stopTracks: false, appData: { source } });
+    const producer = await send.produce({
+      track,
+      stopTracks: false,
+      appData: { source },
+      ...(encodings && { encodings }),
+    });
     this.producers.set(source, producer);
     return producer;
+  }
+
+  get sharing(): boolean {
+    return this.producers.has('screen');
+  }
+
+  /** The screen as a Producer of its own: the camera is untouched, so stopping restores nothing. */
+  async shareScreen(): Promise<void> {
+    const capture = await navigator.mediaDevices.getDisplayMedia({
+      video: { frameRate: { max: 15 } }, // text, not motion
+      audio: false,
+    });
+    const [track] = capture.getVideoTracks();
+    if (!track) return;
+    track.contentHint = 'detail'; // keep text sharp; drop frames rather than resolution
+    try {
+      const producer = await this.produce(track, 'screen', [{ maxBitrate: 1_500_000 }]);
+      // The browser's own "Stop sharing" button ends the track without us doing anything.
+      producer.on('trackended', () => void this.stopScreen());
+    } catch (err) {
+      track.stop(); // e.g. someone else is already sharing (CONFLICT)
+      throw err;
+    }
+    this.onChange();
+  }
+
+  async stopScreen(): Promise<void> {
+    const producer = this.producers.get('screen');
+    if (!producer) return;
+    this.producers.delete('screen');
+    producer.close();
+    producer.track?.stop();
+    this.onChange();
+    await this.signaling.request('sfu.closeProducer', { producerId: producer.id });
+  }
+
+  /** Test hook: what the browser's "Stop sharing" button does (stop() alone fires no 'ended'). */
+  endScreenTrack(): void {
+    const track = this.producers.get('screen')?.track;
+    track?.stop();
+    track?.dispatchEvent(new Event('ended'));
   }
 
   /** Mute: stop sending (client) and stop forwarding (server, so receivers see it at once). */
@@ -86,8 +135,8 @@ export class SfuSession {
   /** Test hook: inbound RTP bytes per remote participant and kind. */
   async inboundBytes(): Promise<Record<string, Record<MediaKind, number>>> {
     const result: Record<string, Record<MediaKind, number>> = {};
-    for (const { consumer, owner } of this.consumers.values()) {
-      const totals = (result[owner] ??= { audio: 0, video: 0 });
+    for (const { consumer, tile } of this.consumers.values()) {
+      const totals = (result[tile] ??= { audio: 0, video: 0 });
       (await consumer.getStats()).forEach((stat: { type: string; bytesReceived?: number }) => {
         if (stat.type === 'inbound-rtp') totals[consumer.kind] += stat.bytesReceived ?? 0;
       });
@@ -97,12 +146,14 @@ export class SfuSession {
 
   close(): void {
     this.unsubscribe();
+    this.producers.get('screen')?.track?.stop(); // not in the call's local stream
     for (const transport of this.transports.values()) transport.close();
     this.transports.clear();
     this.streams.clear();
   }
 
-  private async consume({ producerId, participantId }: ProducerInfo): Promise<void> {
+  private async consume({ producerId, participantId, source }: ProducerInfo): Promise<void> {
+    const tile = source === 'screen' ? `${participantId}#screen` : participantId;
     const recv = this.transports.get('recv');
     if (!recv) return;
     let consumerId: string | undefined;
@@ -119,8 +170,8 @@ export class SfuSession {
         rtpParameters: params.rtpParameters as unknown as types.RtpParameters,
       });
       consumerId = consumer.id;
-      this.consumers.set(consumer.id, { consumer, owner: participantId });
-      this.setTracks(participantId, (tracks) => [...tracks, consumer.track]);
+      this.consumers.set(consumer.id, { consumer, tile });
+      this.setTracks(tile, (tracks) => [...tracks, consumer.track]);
       // Paused on the server until now, so the first key frame reaches an attached track.
       await this.signaling.request('sfu.resumeConsumer', { consumerId: consumer.id });
     } catch (err) {
@@ -135,14 +186,14 @@ export class SfuSession {
     if (!entry) return;
     this.consumers.delete(consumerId);
     entry.consumer.close();
-    this.setTracks(entry.owner, (tracks) => tracks.filter((t) => t !== entry.consumer.track));
+    this.setTracks(entry.tile, (tracks) => tracks.filter((t) => t !== entry.consumer.track));
   }
 
   /** A new MediaStream each time, so <video> sees the change. */
-  private setTracks(owner: string, change: (tracks: MediaStreamTrack[]) => MediaStreamTrack[]) {
-    const tracks = change(this.streams.get(owner)?.getTracks() ?? []);
-    if (tracks.length > 0) this.streams.set(owner, new MediaStream(tracks));
-    else this.streams.delete(owner);
+  private setTracks(tile: string, change: (tracks: MediaStreamTrack[]) => MediaStreamTrack[]) {
+    const tracks = change(this.streams.get(tile)?.getTracks() ?? []);
+    if (tracks.length > 0) this.streams.set(tile, new MediaStream(tracks));
+    else this.streams.delete(tile);
     this.onChange();
   }
 
@@ -166,8 +217,8 @@ export class SfuSession {
           done();
         }, fail);
     });
-    transport.on('produce', ({ kind, rtpParameters }, done, fail) => {
-      const source = sourceOf(kind);
+    transport.on('produce', ({ kind, rtpParameters, appData }, done, fail) => {
+      const source = appData.source as ProducerSource;
       this.signaling
         .request('sfu.produce', { transportId: transport.id, kind, source, rtpParameters })
         .then(({ producerId }) => {
