@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { SfuEvents, SfuRequests } from './sfu.js';
 
 export const SessionHello = z.object({
   protocolVersions: z.array(z.number().int().positive()).min(1).max(10),
@@ -117,6 +118,7 @@ export const Requests = {
     request: z.object({ to: z.string().max(64), signal: MeshSignal }),
     response: Empty,
   },
+  ...SfuRequests,
 } as const;
 
 export type RequestType = keyof typeof Requests;
@@ -141,6 +143,7 @@ export const Events = {
   /** The room ended for everyone; members are no longer bound to it. No roomSeq: it is final. */
   'room.closed': z.object({ reason: z.enum(['media_failure']) }),
   'mesh.signal': z.object({ from: z.string(), signal: MeshSignal }),
+  ...SfuEvents,
 } as const;
 
 export type EventType = keyof typeof Events;

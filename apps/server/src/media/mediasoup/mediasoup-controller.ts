@@ -1,8 +1,15 @@
 import { SignalingError } from '@ts-rtc/protocol';
 import type { FastifyBaseLogger } from 'fastify';
 import type { types } from 'mediasoup';
-import type { MediaController, RtpCapabilities, WorkerInfo } from '../media-controller.js';
+import type {
+  Direction,
+  MediaController,
+  RtpCapabilities,
+  TransportParams,
+  WorkerInfo,
+} from '../media-controller.js';
 import { MEDIA_CODECS } from './codecs.js';
+import { TransportService, type TransportOptions } from './transport-service.js';
 import { WorkerPool, type PoolWorker, type WorkerPoolOptions } from './worker-pool.js';
 
 interface RouterEntry {
@@ -17,17 +24,32 @@ export class MediasoupController implements MediaController {
   private readonly created = new Map<string, RouterEntry>();
   private readonly lostListeners: ((roomId: string) => void)[] = [];
   private readonly pool: WorkerPool;
+  private readonly transports: TransportService;
+  // Transport, Producer and Consumer operations are the TransportService's, exposed as is.
+  readonly connectTransport: MediaController['connectTransport'];
+  readonly produce: MediaController['produce'];
+  readonly consume: MediaController['consume'];
+  readonly closeParticipant: MediaController['closeParticipant'];
+  readonly onTransportClosed: MediaController['onTransportClosed'];
+  readonly counts: MediaController['counts'];
 
   private constructor(
-    options: WorkerPoolOptions,
+    options: WorkerPoolOptions & TransportOptions,
     private readonly log: FastifyBaseLogger,
   ) {
     this.pool = new WorkerPool(options, log, (dead) => {
       this.workerDied(dead);
     });
+    const transports = (this.transports = new TransportService(options, log));
+    this.connectTransport = transports.connect.bind(transports);
+    this.produce = transports.produce.bind(transports);
+    this.consume = transports.consume.bind(transports);
+    this.closeParticipant = transports.closeParticipant.bind(transports);
+    this.onTransportClosed = transports.onClosed.bind(transports);
+    this.counts = transports.counts.bind(transports);
   }
 
-  static async start(options: WorkerPoolOptions, log: FastifyBaseLogger) {
+  static async start(options: WorkerPoolOptions & TransportOptions, log: FastifyBaseLogger) {
     const controller = new MediasoupController(options, log);
     await controller.pool.start();
     return controller;
@@ -58,6 +80,7 @@ export class MediasoupController implements MediaController {
     entry.then(
       ({ router, slot }) => {
         this.created.delete(roomId);
+        this.transports.forgetRoom(roomId);
         if (router.closed) return;
         router.close(); // cascades to its transports, Producers, Consumers
         slot.routers -= 1;
@@ -65,6 +88,17 @@ export class MediasoupController implements MediaController {
       },
       () => undefined,
     );
+  }
+
+  async createTransport(
+    roomId: string,
+    participantId: string,
+    direction: Direction,
+  ): Promise<TransportParams> {
+    const entry = this.created.get(roomId);
+    if (!entry) throw new SignalingError('INVALID_STATE', 'the room has no media router');
+    const { router, slot } = entry;
+    return this.transports.create(router, slot.webRtcServer, roomId, participantId, direction);
   }
 
   onRouterLost(listener: (roomId: string) => void): void {
@@ -108,6 +142,7 @@ export class MediasoupController implements MediaController {
     for (const roomId of lost) {
       this.created.delete(roomId);
       this.routers.delete(roomId);
+      this.transports.forgetRoom(roomId);
     }
     this.log.error({ workerPid: dead.worker.pid, roomsAffected: lost }, 'media.worker_died');
     for (const roomId of lost) for (const listener of this.lostListeners) listener(roomId);

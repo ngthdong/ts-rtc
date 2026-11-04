@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "@ts-rtc/protocol": "workspace:*",
+    "mediasoup-client": "3.26.0",
     "react": "^19",
     "react-dom": "^19"
   },

@@ -6,7 +6,12 @@ export interface App {
   close(): Promise<void>;
 }
 
-export function buildApp(log: FastifyBaseLogger, options: Partial<SignalingOptions> = {}): App {
+export interface AppOptions extends Partial<SignalingOptions> {
+  /** Dev only: GET /debug/media (live mediasoup object counts, Workers). */
+  debugRoutes?: boolean;
+}
+
+export function buildApp(log: FastifyBaseLogger, options: AppOptions = {}): App {
   let ready = true;
   const http = Fastify({
     loggerInstance: log,
@@ -19,6 +24,13 @@ export function buildApp(log: FastifyBaseLogger, options: Partial<SignalingOptio
     if (options.media?.healthy === false) return reply.code(503).send({ status: 'media_failing' });
     return { status: 'ready' };
   });
+  const media = options.media;
+  if (options.debugRoutes && media) {
+    http.get('/debug/media', async () => ({
+      live: media.counts(),
+      workers: await media.inspect(),
+    }));
+  }
 
   const signaling = attachSignaling(http.server, log, { ...defaultSignalingOptions, ...options });
 

@@ -244,7 +244,7 @@ describe('Room invariants', () => {
           // Apply events to each member's view; roomSeq must be exactly +1 each time.
           for (const [member, view] of views) {
             for (const event of member.events) {
-              if (event.type === 'mesh.signal' || event.type === 'room.closed') continue;
+              if (!('roomSeq' in event.payload)) continue; // not a membership event
               expect(event.payload.roomSeq).toBe(view.roomSeq + 1);
               view.roomSeq = event.payload.roomSeq;
               if (event.type === 'participant.joined') {

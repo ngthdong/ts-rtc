@@ -30,12 +30,16 @@ const media = await MediasoupController.start(
     portBase: config.MEDIA_PORT_BASE,
     restartDelayMs: 2_000,
     maxRestartsPerMinute: 5,
+    allowLoopback: config.ALLOW_LOOPBACK ?? config.NODE_ENV !== 'production',
+    connectDeadlineMs: 30_000,
+    iceDisconnectedMs: 30_000,
   },
   log,
 );
 
 const app = buildApp(log, {
   media,
+  debugRoutes: config.NODE_ENV !== 'production',
   allowedOrigins: config.ALLOWED_ORIGINS,
   capacity: config.MESH_MAX_PARTICIPANTS,
   // The session id is the pseudonymous userKey in TURN usernames.

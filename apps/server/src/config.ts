@@ -39,6 +39,8 @@ const Env = z.object({
   MEDIA_ANNOUNCED_ADDRESS: z.string().optional(),
   /** Worker i listens on MEDIA_PORT_BASE + i, UDP and TCP. */
   MEDIA_PORT_BASE: z.coerce.number().int().min(1024).max(65000).default(40_000),
+  /** Let a participant consume its own Producer (SFU loopback test). Default: not in production. */
+  ALLOW_LOOPBACK: z.stringbool().optional(),
   TURN_SECRET: z.string().min(32).optional(),
   TURN_URLS: z
     .string()

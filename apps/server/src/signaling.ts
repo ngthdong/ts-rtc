@@ -7,6 +7,7 @@ import { RequestRouter } from './router.js';
 import { Session, type SessionOptions } from './session.js';
 import { leaveOnDisconnect, registerRoomHandlers, RoomRegistry } from './rooms/handlers.js';
 import { registerReportHandlers } from './reports.js';
+import { registerSfuHandlers } from './rooms/sfu-handlers.js';
 import type { RoomOptions } from './rooms/room.js';
 import type { MediaController } from './media/media-controller.js';
 
@@ -64,7 +65,9 @@ export function attachSignaling(
       };
     })
     .on('session.heartbeat', () => ({ serverTime: Date.now() }));
-  registerRoomHandlers(router, new RoomRegistry(options, log, options.media));
+  const rooms = new RoomRegistry(options, log, options.media);
+  registerRoomHandlers(router, rooms);
+  registerSfuHandlers(router, rooms);
   registerReportHandlers(router);
   let closing = false;
 
@@ -80,7 +83,7 @@ export function attachSignaling(
     wss.handleUpgrade(req, socket, head, (ws) => {
       const session = new Session(ws, log, router, options);
       session.onClose(() => {
-        leaveOnDisconnect(session);
+        leaveOnDisconnect(session, rooms);
       });
     });
   });

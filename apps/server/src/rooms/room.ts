@@ -137,6 +137,15 @@ export class Room {
     this.broadcast('participant.updated', { roomSeq, participantId, ...state });
   }
 
+  has(participantId: string): boolean {
+    return this.participants.has(participantId);
+  }
+
+  /** An event for one member only (e.g. about its own media), if it is still here. */
+  emitTo<T extends EventType>(participantId: string, type: T, payload: EventPayload<T>): void {
+    this.participants.get(participantId)?.peer.emit(type, payload);
+  }
+
   /** Ends the room for everyone at once; members are unbound and told why. Idempotent. */
   close(reason: 'media_failure'): void {
     if (this.state === 'closed') return;
