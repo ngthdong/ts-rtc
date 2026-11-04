@@ -45,7 +45,8 @@ export class MeshCall {
   /** Samples every connection (call every 2 s); quality is computed against the last sample. */
   async sampleQuality(): Promise<Record<string, PeerQuality>> {
     const connections = new Map([...this.peers].map(([id, peer]) => [id, peer.pc]));
-    this.latestQuality = await this.stats.sample(connections);
+    // Every connection sampled has an entry (Partial only because keys are open-ended).
+    this.latestQuality = (await this.stats.sample(connections)) as Record<string, PeerQuality>;
     return this.latestQuality;
   }
 

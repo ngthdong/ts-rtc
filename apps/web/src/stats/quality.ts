@@ -93,8 +93,11 @@ export function computeQuality(current: Stats, previous: Stats | undefined): Pee
 export class StatsCollector {
   private previous = new Map<string, Stats>();
 
-  async sample(connections: Map<string, RTCPeerConnection>): Promise<Record<string, PeerQuality>> {
-    const result: Record<string, PeerQuality> = {};
+  /** Anything with getStats(): RTCPeerConnections, or mediasoup-client transports. */
+  async sample<K extends string>(
+    connections: Map<K, { getStats(): Promise<RTCStatsReport> }>,
+  ): Promise<Partial<Record<K, PeerQuality>>> {
+    const result: Partial<Record<K, PeerQuality>> = {};
     const next = new Map<string, Stats>(); // peers that left are forgotten here
     for (const [id, pc] of connections) {
       const stats = new Map<string, Stat>();

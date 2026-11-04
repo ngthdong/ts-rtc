@@ -1,9 +1,10 @@
-import type { MuteState, RoomSnapshot } from '@ts-rtc/protocol';
+import type { MuteState, RoomMode, RoomSnapshot } from '@ts-rtc/protocol';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { getLocalMedia, getTrack, liveLocalTracks, stopTracks } from './media/localMedia.js';
 import { MeshCall, type RemotePeer } from './mesh/MeshCall.js';
 import { countOpenConnections } from './mesh/PeerSession.js';
 import { RoomClient } from './room/RoomClient.js';
+import { SfuSession } from './sfu/SfuSession.js';
 import type { PeerQuality } from './stats/quality.js';
 import { initialSnapshot, SignalingClient } from './signaling/SignalingClient.js';
 
@@ -26,10 +27,15 @@ declare global {
 export const relayOnly = new URLSearchParams(window.location.search).has('relay');
 
 let currentMesh: MeshCall | null = null;
+let currentSfu: { session: SfuSession; self: string } | null = null;
+let latestQuality: Record<string, PeerQuality> = {};
 if (import.meta.env.DEV) {
   window.__tsRtc = {
-    inboundBytes: () => currentMesh?.inboundBytes() ?? Promise.resolve({}),
-    quality: () => currentMesh?.latestQuality ?? {},
+    inboundBytes: async () =>
+      currentSfu
+        ? { [currentSfu.self]: await currentSfu.session.inboundBytes() }
+        : (currentMesh?.inboundBytes() ?? {}),
+    quality: () => latestQuality,
     rawStats: () => currentMesh?.rawStats() ?? Promise.resolve([]),
     resources: () => ({
       openConnections: countOpenConnections(),
@@ -63,6 +69,7 @@ export function useCall() {
   const refs = useRef<{ client: SignalingClient; rooms: RoomClient } | null>(null);
   const call = useRef<{
     mesh: MeshCall;
+    sfu?: SfuSession;
     stream: MediaStream;
     poll: ReturnType<typeof setInterval>;
   } | null>(null);
@@ -71,9 +78,11 @@ export function useCall() {
   const stopCall = useCallback(() => {
     clearInterval(call.current?.poll);
     call.current?.mesh.close();
+    call.current?.sfu?.close();
     stopTracks(call.current?.stream ?? null);
     call.current = null;
-    currentMesh = null;
+    currentMesh = currentSfu = null;
+    latestQuality = {};
   }, []);
 
   const endCall = useCallback(() => {
@@ -107,22 +116,31 @@ export function useCall() {
 
   /** Joins `roomId`, or a new room when it is null. Media is acquired before joining. */
   const join = useCallback(
-    async (roomId: string | null, displayName: string) => {
+    async (roomId: string | null, displayName: string, mode: RoomMode = 'mesh') => {
       if (!refs.current) return;
       const { client, rooms } = refs.current;
-      const target = roomId ?? (await rooms.create());
+      const target = roomId ?? (await rooms.create(mode));
       const media = await getLocalMedia();
       setLocal(media.stream);
       setMediaError(media.error);
-      const mesh = new MeshCall(client, media.stream, () => ({
+      const ice = (): {
+        iceServers: RTCIceServer[];
+        iceTransportPolicy: RTCIceTransportPolicy;
+      } => ({
         iceServers: client.snapshot.iceServers,
         iceTransportPolicy: relayOnly ? 'relay' : 'all',
-      }));
+      });
+      const mesh = new MeshCall(client, media.stream, ice);
       let ticks = 0;
       const poll = setInterval(() => {
-        void mesh.sampleQuality().then((sample) => {
-          setQuality(sample);
-          if (++ticks % 5 === 0) mesh.reportQuality(); // every 10 s
+        const sample = currentSfu
+          ? currentSfu.session
+              .sampleQuality()
+              .then((q) => (q ? { [currentSfu?.self ?? '']: q } : {}))
+          : mesh.sampleQuality();
+        void sample.then((q) => {
+          setQuality((latestQuality = q));
+          if (!currentSfu && ++ticks % 5 === 0) mesh.reportQuality(); // every 10 s
         });
       }, 2_000);
       call.current = { mesh, stream: media.stream, poll };
@@ -132,7 +150,22 @@ export function useCall() {
       });
       try {
         await rooms.join(target, displayName);
-        if (rooms.view?.mode === 'mesh') mesh.start(rooms.view); // SFU media
+        const view = rooms.view;
+        if (view?.mode === 'mesh') mesh.start(view);
+        if (view?.mode === 'sfu' && view.routerRtpCapabilities) {
+          // Stage 10: the SFU path, tested with yourself (loopback). Others' media: Stage 11.
+          let echo: MediaStream | null = null;
+          const show = () => {
+            const state = (call.current?.sfu?.states.recv ?? 'new') as RTCPeerConnectionState;
+            setRemotes([{ participantId: view.participantId, stream: echo, state }]);
+          };
+          const sfu = await SfuSession.start(client, view.routerRtpCapabilities, ice(), show);
+          if (call.current?.mesh !== mesh) return sfu.close(); // left meanwhile
+          call.current.sfu = sfu;
+          currentSfu = { session: sfu, self: view.participantId };
+          echo = await sfu.loopback(media.stream.getTracks());
+          show();
+        }
         const state = muteState(media.stream);
         setMuted(state);
         if (state.audioMuted || state.videoMuted) await rooms.setMuted(state);

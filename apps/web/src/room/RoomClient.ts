@@ -1,4 +1,4 @@
-import type { MuteState, RoomSnapshot, SignalingEvent } from '@ts-rtc/protocol';
+import type { MuteState, RoomMode, RoomSnapshot, SignalingEvent } from '@ts-rtc/protocol';
 import type { SignalingClient } from '../signaling/SignalingClient.js';
 
 export class RoomClient {
@@ -26,8 +26,8 @@ export class RoomClient {
     };
   }
 
-  async create(): Promise<string> {
-    const { roomId } = await this.signaling.request('room.create', {});
+  async create(mode: RoomMode = 'mesh'): Promise<string> {
+    const { roomId } = await this.signaling.request('room.create', { mode });
     return roomId;
   }
 

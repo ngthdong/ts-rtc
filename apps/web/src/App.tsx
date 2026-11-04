@@ -105,6 +105,9 @@ export function App() {
           />{' '}
           <button disabled={!name.trim()} onClick={() => run(() => join(null, name))}>
             Create room
+          </button>{' '}
+          <button disabled={!name.trim()} onClick={() => run(() => join(null, name, 'sfu'))}>
+            SFU loopback test
           </button>
           <p>
             <input
@@ -149,6 +152,7 @@ export function App() {
                   <Video stream={peer.stream} />
                   <figcaption>
                     {m?.displayName ?? 'unknown'}
+                    {peer.participantId === room.participantId && ' (you, back from the SFU)'}
                     {m?.audioMuted && <span data-testid="muted"> · muted</span>}
                     {m?.videoMuted && <span data-testid="camera-off"> · camera off</span>} ·{' '}
                     <span data-testid="peer-state">{peer.state}</span>
