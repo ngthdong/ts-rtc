@@ -1,68 +1,81 @@
-import type { MediaKind } from '@ts-rtc/protocol';
+import type { MediaKind, ProducerInfo, ProducerSource, RoomSnapshot } from '@ts-rtc/protocol';
 import { Device, type types } from 'mediasoup-client';
 import type { SignalingClient } from '../signaling/SignalingClient.js';
 import { StatsCollector, type PeerQuality } from '../stats/quality.js';
 
 type Direction = 'send' | 'recv';
 type Ice = { iceServers: RTCIceServer[]; iceTransportPolicy: RTCIceTransportPolicy };
+const sourceOf = (kind: string): ProducerSource => (kind === 'audio' ? 'mic' : 'camera');
 
 /**
- * One SFU session: a mediasoup-client Device and at most one send and one recv transport.
- * mediasoup-client turns produce/consume into SDP on its own RTCPeerConnections; the app
- * never sees SDP in SFU mode.
+ * The SFU side of a call: one mediasoup-client Device, one send and one recv transport, a
+ * Producer per local source and a Consumer per remote Producer. mediasoup-client turns
+ * produce/consume into SDP on its own RTCPeerConnections; the app never sees SDP.
+ * Created before room.join (like MeshCall) so no sfu.newProducer is missed; held until start().
  */
 export class SfuSession {
   readonly states: Record<Direction, string> = { send: 'new', recv: 'new' };
+  /** Received media per participant: tiles are keyed by participant, tracks by Consumer. */
+  readonly streams = new Map<string, MediaStream>();
   private readonly device = new Device();
   private readonly transports = new Map<Direction, types.Transport>();
+  private readonly producers = new Map<ProducerSource, types.Producer>();
+  private readonly consumers = new Map<string, { consumer: types.Consumer; owner: string }>();
   private readonly stats = new StatsCollector();
+  private held: ProducerInfo[] | null = [];
+  private readonly unsubscribe: () => void;
 
-  private constructor(
-    private readonly signaling: Pick<SignalingClient, 'request'>,
+  constructor(
+    private readonly signaling: Pick<SignalingClient, 'request' | 'onEvent'>,
     private readonly ice: Ice,
     private readonly onChange: () => void,
-  ) {}
-
-  static async start(
-    signaling: Pick<SignalingClient, 'request'>,
-    routerRtpCapabilities: Record<string, unknown>,
-    ice: Ice,
-    onChange: () => void,
-  ): Promise<SfuSession> {
-    const session = new SfuSession(signaling, ice, onChange);
-    await session.device.load({ routerRtpCapabilities });
-    return session;
+  ) {
+    this.unsubscribe = signaling.onEvent((event) => {
+      if (event.type === 'sfu.newProducer') {
+        if (this.held) this.held.push(event.payload);
+        else void this.consume(event.payload);
+      }
+      if (event.type === 'sfu.consumerClosed') this.drop(event.payload.consumerId);
+    });
   }
 
-  /**
-   * Diagnostics: send each track to the SFU and receive it back on the recv transport.
-   * Proves the browser ⇄ Worker path (ICE, DTLS, SRTP) with nobody else involved.
-   */
-  async loopback(tracks: MediaStreamTrack[]): Promise<MediaStream> {
-    const send = await this.transport('send');
-    const recv = await this.transport('recv');
-    const received = new MediaStream();
+  /** Sends `tracks`, receives everyone already producing, then whatever comes next. */
+  async start(snapshot: RoomSnapshot, tracks: MediaStreamTrack[], loopback = false) {
+    const { routerRtpCapabilities = {}, producers = [], participantId } = snapshot;
+    await this.device.load({ routerRtpCapabilities });
+    await this.transport('send');
+    await this.transport('recv');
+    const own: ProducerInfo[] = [];
     for (const track of tracks) {
-      const producer = await send.produce({ track, stopTracks: false });
-      const consumer = await this.signaling.request('sfu.consume', {
-        transportId: recv.id,
-        producerId: producer.id,
-        rtpCapabilities: this.device.recvRtpCapabilities,
-      });
-      const { track: echo } = await recv.consume({
-        id: consumer.consumerId,
-        producerId: consumer.producerId,
-        kind: consumer.kind,
-        rtpParameters: consumer.rtpParameters as unknown as types.RtpParameters,
-      });
-      received.addTrack(echo);
-      // Consumers start paused on the server: resume once the track is attached.
-      await this.signaling.request('sfu.resumeConsumer', { consumerId: consumer.consumerId });
+      const { id, kind } = await this.produce(track);
+      own.push({ producerId: id, participantId, kind, source: sourceOf(kind) });
     }
-    return received;
+    // Loopback (diagnostics): receive your own Producers back through the SFU.
+    const pending = [...producers, ...(loopback ? own : []), ...(this.held ?? [])];
+    this.held = null;
+    for (const info of pending) await this.consume(info);
   }
 
-  /** Quality of the round trip: what arrives on recv, what leaves on send. */
+  /** A device turned on mid-call (camera denied at join): a new Producer, announced to all. */
+  async produce(track: MediaStreamTrack): Promise<types.Producer> {
+    const send = this.transports.get('send');
+    if (!send) throw new Error('no send transport');
+    const source = sourceOf(track.kind);
+    const producer = await send.produce({ track, stopTracks: false, appData: { source } });
+    this.producers.set(source, producer);
+    return producer;
+  }
+
+  /** Mute: stop sending (client) and stop forwarding (server, so receivers see it at once). */
+  async setPaused(kind: MediaKind, paused: boolean): Promise<void> {
+    const producer = this.producers.get(sourceOf(kind));
+    if (!producer) return;
+    if (paused) producer.pause();
+    else producer.resume();
+    await this.signaling.request('sfu.pauseProducer', { producerId: producer.id, paused });
+  }
+
+  /** The send and recv transports together (one entry: SFU traffic is not per peer). */
   async sampleQuality(): Promise<PeerQuality | undefined> {
     const { send, recv } = await this.stats.sample(this.transports);
     return (
@@ -70,20 +83,67 @@ export class SfuSession {
     );
   }
 
-  /** Test hook: inbound RTP bytes on the recv transport, per kind. */
-  async inboundBytes(): Promise<Record<MediaKind, number>> {
-    const totals = { audio: 0, video: 0 };
-    (await this.transports.get('recv')?.getStats())?.forEach(
-      (stat: { type: string; kind?: MediaKind; bytesReceived?: number }) => {
-        if (stat.type === 'inbound-rtp' && stat.kind) totals[stat.kind] += stat.bytesReceived ?? 0;
-      },
-    );
-    return totals;
+  /** Test hook: inbound RTP bytes per remote participant and kind. */
+  async inboundBytes(): Promise<Record<string, Record<MediaKind, number>>> {
+    const result: Record<string, Record<MediaKind, number>> = {};
+    for (const { consumer, owner } of this.consumers.values()) {
+      const totals = (result[owner] ??= { audio: 0, video: 0 });
+      (await consumer.getStats()).forEach((stat: { type: string; bytesReceived?: number }) => {
+        if (stat.type === 'inbound-rtp') totals[consumer.kind] += stat.bytesReceived ?? 0;
+      });
+    }
+    return result;
   }
 
   close(): void {
+    this.unsubscribe();
     for (const transport of this.transports.values()) transport.close();
     this.transports.clear();
+    this.streams.clear();
+  }
+
+  private async consume({ producerId, participantId }: ProducerInfo): Promise<void> {
+    const recv = this.transports.get('recv');
+    if (!recv) return;
+    let consumerId: string | undefined;
+    try {
+      const params = await this.signaling.request('sfu.consume', {
+        transportId: recv.id,
+        producerId,
+        rtpCapabilities: this.device.recvRtpCapabilities,
+      });
+      const consumer = await recv.consume({
+        id: params.consumerId,
+        producerId,
+        kind: params.kind,
+        rtpParameters: params.rtpParameters as unknown as types.RtpParameters,
+      });
+      consumerId = consumer.id;
+      this.consumers.set(consumer.id, { consumer, owner: participantId });
+      this.setTracks(participantId, (tracks) => [...tracks, consumer.track]);
+      // Paused on the server until now, so the first key frame reaches an attached track.
+      await this.signaling.request('sfu.resumeConsumer', { consumerId: consumer.id });
+    } catch (err) {
+      // Its Producer closed meanwhile; sfu.consumerClosed may have come before we had it.
+      if (consumerId) this.drop(consumerId);
+      console.warn('sfu: consume failed (its producer may have just closed)', err);
+    }
+  }
+
+  private drop(consumerId: string): void {
+    const entry = this.consumers.get(consumerId);
+    if (!entry) return;
+    this.consumers.delete(consumerId);
+    entry.consumer.close();
+    this.setTracks(entry.owner, (tracks) => tracks.filter((t) => t !== entry.consumer.track));
+  }
+
+  /** A new MediaStream each time, so <video> sees the change. */
+  private setTracks(owner: string, change: (tracks: MediaStreamTrack[]) => MediaStreamTrack[]) {
+    const tracks = change(this.streams.get(owner)?.getTracks() ?? []);
+    if (tracks.length > 0) this.streams.set(owner, new MediaStream(tracks));
+    else this.streams.delete(owner);
+    this.onChange();
   }
 
   private async transport(direction: Direction): Promise<types.Transport> {
@@ -107,7 +167,7 @@ export class SfuSession {
         }, fail);
     });
     transport.on('produce', ({ kind, rtpParameters }, done, fail) => {
-      const source = kind === 'audio' ? 'mic' : 'camera';
+      const source = sourceOf(kind);
       this.signaling
         .request('sfu.produce', { transportId: transport.id, kind, source, rtpParameters })
         .then(({ producerId }) => {
