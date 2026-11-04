@@ -23,6 +23,12 @@ export class RoomRegistry {
       const room = this.rooms.get(roomId);
       if (room) void room.executor.run(() => room.close('media_failure'));
     });
+    media?.onActiveSpeaker((roomId, participantId) => {
+      const room = this.rooms.get(roomId);
+      void room?.executor.run(() => {
+        room.setActiveSpeaker(participantId); // a speaker who left meanwhile: dropped there
+      });
+    });
     media?.onEvent((roomId, participantId, { type, payload }) => {
       const room = this.rooms.get(roomId);
       void room?.executor.run(() => {

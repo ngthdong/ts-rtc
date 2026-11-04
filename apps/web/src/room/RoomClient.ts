@@ -64,6 +64,14 @@ export class RoomClient {
       void this.resync();
       return;
     }
+    if (event.type === 'sfu.activeSpeaker') {
+      this.set({
+        ...view,
+        roomSeq: event.payload.roomSeq,
+        activeSpeaker: event.payload.participantId,
+      });
+      return;
+    }
     let members = view.members;
     if (event.type === 'participant.joined') {
       members = [...members, event.payload.participant];

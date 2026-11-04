@@ -33,7 +33,7 @@ test('finds the selected pair through the transport stats', () => {
         currentRoundTripTime: 0.0123,
       },
       { id: 'L1', type: 'local-candidate', candidateType: 'host', protocol: 'udp' },
-      { id: 'L2', type: 'local-candidate', candidateType: 'srflx', protocol: 'udp' },
+      { id: 'L2', type: 'local-candidate', candidateType: 'srflx', protocol: 'udp', port: 54401 },
       { id: 'R1', type: 'remote-candidate', candidateType: 'host' },
       { id: 'R2', type: 'remote-candidate', candidateType: 'prflx' },
     ].map((s) => [s.id, s]),
@@ -42,6 +42,7 @@ test('finds the selected pair through the transport stats', () => {
     local: 'srflx',
     remote: 'prflx',
     protocol: 'udp',
+    localPort: 54401,
     rttMs: 12,
   });
   expect(selectedPath(new Map())).toBeNull();

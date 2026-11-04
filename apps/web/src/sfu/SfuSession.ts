@@ -8,6 +8,16 @@ type Ice = { iceServers: RTCIceServer[]; iceTransportPolicy: RTCIceTransportPoli
 const sourceOf = (kind: string): ProducerSource => (kind === 'audio' ? 'mic' : 'camera');
 
 /**
+ * Camera simulcast: three layers in one m-line; mediasoup forwards each receiver the best layer
+ * its bandwidth allows. Starting points to be measured, not claims. Screens stay single-layer.
+ */
+const CAMERA_LAYERS: types.RtpEncodingParameters[] = [
+  { scaleResolutionDownBy: 4, maxBitrate: 150_000, scalabilityMode: 'L1T3' },
+  { scaleResolutionDownBy: 2, maxBitrate: 500_000, scalabilityMode: 'L1T3' },
+  { scaleResolutionDownBy: 1, maxBitrate: 1_200_000, scalabilityMode: 'L1T3' },
+];
+
+/**
  * The SFU side of a call: one mediasoup-client Device, one send and one recv transport, a
  * Producer per local source and a Consumer per remote Producer. mediasoup-client turns
  * produce/consume into SDP on its own RTCPeerConnections; the app never sees SDP.
@@ -29,6 +39,7 @@ export class SfuSession {
     private readonly signaling: Pick<SignalingClient, 'request' | 'onEvent'>,
     private readonly ice: Ice,
     private readonly onChange: () => void,
+    private readonly simulcast = true,
   ) {
     this.unsubscribe = signaling.onEvent((event) => {
       if (event.type === 'sfu.newProducer') {
@@ -68,7 +79,7 @@ export class SfuSession {
       track,
       stopTracks: false,
       appData: { source },
-      ...(encodings && { encodings }),
+      encodings: encodings ?? (source === 'camera' && this.simulcast ? CAMERA_LAYERS : undefined),
     });
     this.producers.set(source, producer);
     return producer;
@@ -130,6 +141,34 @@ export class SfuSession {
     return (
       recv && { ...recv, outKbps: send?.outKbps ?? null, limitation: send?.limitation ?? null }
     );
+  }
+
+  /** Test hook: the camera's layers as sent (outbound-rtp per rid), lowest first. */
+  async sendLayers(): Promise<{ rid: string; bytes: number; width: number | null }[]> {
+    const layers: { rid: string; bytes: number; width: number | null }[] = [];
+    (await this.producers.get('camera')?.getStats())?.forEach(
+      (stat: { type: string; rid?: string; bytesSent?: number; frameWidth?: number }) => {
+        if (stat.type !== 'outbound-rtp') return;
+        layers.push({
+          rid: stat.rid ?? '',
+          bytes: stat.bytesSent ?? 0,
+          width: stat.frameWidth ?? null,
+        });
+      },
+    );
+    return layers.sort((a, b) => (a.width ?? 0) - (b.width ?? 0));
+  }
+
+  /** Test hook: the width of the video each tile receives (the layer the SFU forwards). */
+  async receivedWidths(): Promise<Record<string, number>> {
+    const result: Record<string, number> = {};
+    for (const { consumer, tile } of this.consumers.values()) {
+      if (consumer.kind !== 'video') continue;
+      (await consumer.getStats()).forEach((stat: { type: string; frameWidth?: number }) => {
+        if (stat.type === 'inbound-rtp' && stat.frameWidth) result[tile] = stat.frameWidth;
+      });
+    }
+    return result;
   }
 
   /** Test hook: inbound RTP bytes per remote participant and kind. */

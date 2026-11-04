@@ -76,6 +76,11 @@ export function App() {
   }
 
   const member = (id: string) => room?.members.find((m) => m.participantId === id);
+  /** The dominant speaker's tile gets a border; nothing moves (no reordering, no resizing). */
+  const speaking = (id: string) =>
+    room?.activeSpeaker === id
+      ? { 'data-speaking': true, style: { margin: 0, outline: '3px solid #2a7', borderRadius: 8 } }
+      : {};
   const { status, closeCode, closeReason } = connection;
   return (
     <main style={{ fontFamily: 'system-ui, sans-serif', padding: 24, maxWidth: 960 }}>
@@ -153,7 +158,7 @@ export function App() {
           </p>
           {mediaError && <p style={{ color: 'darkorange' }}>{mediaError}</p>}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 12 }}>
-            <figure style={{ margin: 0 }}>
+            <figure style={{ margin: 0 }} {...speaking(room.participantId)}>
               <Video stream={local} muted />
               <figcaption>{member(room.participantId)?.displayName} (you)</figcaption>
             </figure>
@@ -172,7 +177,12 @@ export function App() {
                 );
               }
               return (
-                <figure key={peer.participantId} style={{ margin: 0 }} data-testid="remote">
+                <figure
+                  key={peer.participantId}
+                  style={{ margin: 0 }}
+                  {...speaking(peer.participantId)}
+                  data-testid="remote"
+                >
                   <Video stream={peer.stream} />
                   <figcaption>
                     {m?.displayName ?? 'unknown'}

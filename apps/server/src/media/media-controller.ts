@@ -29,7 +29,7 @@ export interface MediaCounts {
   consumers: number;
 }
 
-/** Per-Worker numbers for tests, the dev dump and (Stage 17) metrics. */
+/** Per-Worker numbers for tests, the dev dump and metrics. */
 export interface WorkerInfo {
   index: number;
   pid: number;
@@ -81,6 +81,8 @@ export interface MediaController {
   closeParticipant(participantId: string): void;
   /** Events for one participant (transport closed by the server, Consumer lost its Producer). */
   onEvent(listener: (roomId: string, participantId: string, event: MediaEvent) => void): void;
+  /** The room's dominant speaker changed, already debounced (SpeakerGate). */
+  onActiveSpeaker(listener: (roomId: string, participantId: string) => void): void;
   counts(): MediaCounts;
   /** False once Workers die faster than they may be restarted: /readyz answers 503. */
   readonly healthy: boolean;

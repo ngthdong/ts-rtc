@@ -51,6 +51,8 @@ export interface SelectedPath {
   local: string;
   remote: string;
   protocol: string;
+  /** This browser's port of the pair: the E2E bandwidth test polices that one connection. */
+  localPort: number | null;
   rttMs: number | null;
 }
 
@@ -75,6 +77,7 @@ export function selectedPath(stats: {
     local: String(local.candidateType),
     remote: String(remote.candidateType),
     protocol: String(local.protocol),
+    localPort: typeof local.port === 'number' ? local.port : null,
     rttMs: typeof rtt === 'number' ? Math.round(rtt * 1000) : null,
   };
 }

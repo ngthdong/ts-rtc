@@ -21,6 +21,10 @@ declare global {
       receivedTracks(): number;
       /** What the browser's own "Stop sharing" button does to the screen track. */
       endScreenTrack(): void;
+      /** SFU: the camera's simulcast layers as sent, lowest first. */
+      sendLayers(): Promise<{ rid: string; bytes: number; width: number | null }[]>;
+      /** SFU: the width of the video each tile receives right now. */
+      receivedWidths(): Promise<Record<string, number>>;
       /** Leak check: both must be 0 after leaving, and members − 1 / ≤ 2 during a call. */
       resources(): { openConnections: number; liveLocalTracks: number };
     };
@@ -32,6 +36,8 @@ const params = new URLSearchParams(window.location.search);
 export const relayOnly = params.has('relay');
 /** New rooms use the SFU; `?mode=mesh` keeps Mesh (benchmarks, comparison). */
 export const defaultMode: RoomMode = params.get('mode') === 'mesh' ? 'mesh' : 'sfu';
+/** `?simulcast=off`: one camera layer (benchmarks: simulcast on vs off). */
+const simulcast = params.get('simulcast') !== 'off';
 
 export interface JoinOptions {
   mode?: RoomMode; // for a new room
@@ -48,6 +54,8 @@ if (import.meta.env.DEV) {
     quality: () => latestQuality,
     rawStats: () => currentMesh?.rawStats() ?? Promise.resolve([]),
     endScreenTrack: () => currentSfu?.endScreenTrack(),
+    sendLayers: () => currentSfu?.sendLayers() ?? Promise.resolve([]),
+    receivedWidths: () => currentSfu?.receivedWidths() ?? Promise.resolve({}),
     receivedTracks: () =>
       [...(currentSfu?.streams.values() ?? [])].reduce((n, s) => n + s.getTracks().length, 0),
     resources: () => ({
@@ -173,7 +181,7 @@ export function useCall() {
       // Both listen from before the join (no early offer or newProducer is lost); the room's
       // mode decides which one starts.
       const mesh = new MeshCall(client, media.stream, ice);
-      const sfu = new SfuSession(client, ice(), showSfu);
+      const sfu = new SfuSession(client, ice(), showSfu, simulcast);
       let ticks = 0;
       const poll = setInterval(() => {
         const current = call.current;

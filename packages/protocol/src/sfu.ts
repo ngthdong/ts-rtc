@@ -68,6 +68,8 @@ export const SfuEvents = {
   'sfu.newProducer': ProducerInfo,
   /** A Consumer of yours ended because its Producer closed (its owner left or stopped). */
   'sfu.consumerClosed': z.object({ consumerId: Id, reason: z.enum(['producer_closed']) }),
+  /** The room's dominant speaker changed (debounced); room state, ordered by roomSeq. */
+  'sfu.activeSpeaker': z.object({ roomSeq: z.number().int().positive(), participantId: Id }),
   /** The server closed one of your transports: never connected, DTLS failed, ICE gone 30 s. */
   'sfu.transportClosed': z.object({
     transportId: Id,

@@ -18,7 +18,7 @@ export interface TransportOptions {
   allowLoopback: boolean;
   /** A transport not DTLS-connected this long after creation is closed. */
   connectDeadlineMs: number;
-  /** ICE disconnected this long closes the transport (Stage 15: ICE restart instead). */
+  /** ICE disconnected this long closes the transport. */
   iceDisconnectedMs: number;
 }
 
@@ -55,6 +55,11 @@ export class TransportService {
 
   onEvent(listener: Listener): void {
     this.listeners.push(listener);
+  }
+
+  /** The room a participant's media lives in, while it has any. */
+  roomOf(participantId: string): string | undefined {
+    return this.parties.get(participantId)?.roomId;
   }
 
   producers(roomId: string): ProducerInfo[] {

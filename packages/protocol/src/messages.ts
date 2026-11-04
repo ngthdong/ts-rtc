@@ -44,6 +44,8 @@ export const RoomSnapshot = z.object({
   routerRtpCapabilities: z.record(z.string(), z.unknown()).optional(),
   /** SFU rooms: everyone else's current Producers; later ones arrive as sfu.newProducer. */
   producers: z.array(ProducerInfo).optional(),
+  /** SFU rooms: the current dominant speaker, if one is known and still here. */
+  activeSpeaker: z.string().optional(),
 });
 export type RoomSnapshot = z.infer<typeof RoomSnapshot>;
 
