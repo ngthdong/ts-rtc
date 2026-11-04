@@ -11,7 +11,8 @@ import type { WorkerPoolOptions } from '../src/media/mediasoup/worker-pool.js';
 import { startServer, TestClient } from './helpers.js';
 
 // Real mediasoup-worker processes. Each test uses its own ports: a killed Worker's sockets
-// may still be closing when the next test starts.
+// may still be closing when the next test starts. All below 32768: Linux hands out client ports
+// from 32768 up, and a test's own WebSocket on one of them would make the Worker's bind fail.
 const silent = pino({ level: 'silent' });
 const options = (portBase: number, extra: Partial<WorkerPoolOptions> = {}) => ({
   count: 2,
@@ -66,11 +67,11 @@ async function bindFails(port: number, protocol: 'udp' | 'tcp'): Promise<string>
 }
 
 test('starts N Workers, each with a WebRtcServer on its own UDP and TCP port', async () => {
-  const m = await startMedia(41_000);
+  const m = await startMedia(21_000);
   const workers = await m.inspect();
   expect(workers.map((w) => w.index)).toEqual([0, 1]);
   expect(new Set(workers.map((w) => w.pid)).size).toBe(2);
-  for (const port of [41_000, 41_001]) {
+  for (const port of [21_000, 21_001]) {
     expect(await bindFails(port, 'udp')).toBe('EADDRINUSE');
     expect(await bindFails(port, 'tcp')).toBe('EADDRINUSE');
   }
@@ -78,7 +79,7 @@ test('starts N Workers, each with a WebRtcServer on its own UDP and TCP port', a
 });
 
 test('50 concurrent ensureRouter calls for one room create one Router', async () => {
-  const m = await startMedia(41_010);
+  const m = await startMedia(21_010);
   const all = await Promise.all(Array.from({ length: 50 }, () => m.ensureRouter('room-a')));
   expect(new Set(all.map((caps) => JSON.stringify(caps))).size).toBe(1);
   expect(await routerCounts(m)).toEqual([1, 0]);
@@ -87,7 +88,7 @@ test('50 concurrent ensureRouter calls for one room create one Router', async ()
 });
 
 test('Routers go to the least-loaded Worker; closing frees the slot', async () => {
-  const m = await startMedia(41_020);
+  const m = await startMedia(21_020);
   for (const room of ['a', 'b', 'c']) await m.ensureRouter(room);
   expect(await routerCounts(m)).toEqual([2, 1]);
   m.closeRouter('a');
@@ -98,7 +99,7 @@ test('Routers go to the least-loaded Worker; closing frees the slot', async () =
 });
 
 test('a Router closed while still being created is closed as soon as it exists', async () => {
-  const m = await startMedia(41_030);
+  const m = await startMedia(21_030);
   const pending = m.ensureRouter('x');
   m.closeRouter('x');
   await pending;
@@ -106,7 +107,7 @@ test('a Router closed while still being created is closed as soon as it exists',
 });
 
 test('a Worker dying during createRouter fails with a retryable error', async () => {
-  const m = await startMedia(41_040, { count: 1, restartDelayMs: 60_000 });
+  const m = await startMedia(21_040, { count: 1, restartDelayMs: 60_000 });
   const [worker] = await m.inspect();
   // Killed first, so the Worker cannot answer in time; Node has not seen 'died' yet (no await
   // in between), so from its point of view the Worker dies while the request is in flight.
@@ -116,7 +117,7 @@ test('a Worker dying during createRouter fails with a retryable error', async ()
 });
 
 test('SFU join returns the Router capabilities; two first joins at once make one Router', async () => {
-  const m = await startMedia(41_050);
+  const m = await startMedia(21_050);
   const server = await serve({ media: m });
   const alice = await TestClient.greeted(server);
   const bob = await TestClient.greeted(server);
@@ -132,7 +133,7 @@ test('SFU join returns the Router capabilities; two first joins at once make one
 });
 
 test('a room that closes (empty grace over) closes its Router', async () => {
-  const m = await startMedia(41_060);
+  const m = await startMedia(21_060);
   const server = await serve({ media: m, emptyGraceMs: 50 });
   const alice = await TestClient.greeted(server);
   const { roomId } = await alice.ok<{ roomId: string }>('room.create', { mode: 'sfu' });
@@ -143,7 +144,7 @@ test('a room that closes (empty grace over) closes its Router', async () => {
 });
 
 test('a dead Worker closes only its rooms, members are told, and a replacement starts', async () => {
-  const m = await startMedia(41_070);
+  const m = await startMedia(21_070);
   const server = await serve({ media: m });
   const alice = await TestClient.greeted(server);
   const bob = await TestClient.greeted(server);
@@ -175,7 +176,7 @@ test('a dead Worker closes only its rooms, members are told, and a replacement s
 });
 
 test('a crash loop (6 deaths in a minute) stops restarts and makes /readyz answer 503', async () => {
-  const m = await startMedia(41_080, { count: 1, restartDelayMs: 300 });
+  const m = await startMedia(21_080, { count: 1, restartDelayMs: 300 });
   await serve({ media: m });
   for (let death = 0; death < 6; death++) {
     await expect.poll(async () => (await m.inspect()).length).toBe(1); // replaced
