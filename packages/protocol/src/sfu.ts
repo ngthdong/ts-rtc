@@ -5,8 +5,8 @@ const Opaque = z.record(z.string(), z.unknown());
 const Id = z.string().min(1).max(64);
 export const MediaKind = z.enum(['audio', 'video']);
 export type MediaKind = z.infer<typeof MediaKind>;
-/** What a Producer carries; at most one Producer per source and participant. */
-export const ProducerSource = z.enum(['mic', 'camera']);
+/** What a Producer carries; at most one per source and participant, one screen per room. */
+export const ProducerSource = z.enum(['mic', 'camera', 'screen']);
 export type ProducerSource = z.infer<typeof ProducerSource>;
 
 /** A Producer as other members learn about it: in the join snapshot and in sfu.newProducer. */
@@ -54,6 +54,8 @@ export const SfuRequests = {
   },
   /** Consumers start paused; resume once the track is attached, so no key frame is lost. */
   'sfu.resumeConsumer': { request: z.object({ consumerId: Id }), response: z.object({}) },
+  /** Stop a Producer for good (screen share ended). Its Consumers get sfu.consumerClosed. */
+  'sfu.closeProducer': { request: z.object({ producerId: Id }), response: z.object({}) },
   /** Mute: the Worker stops forwarding this Producer to everyone. Own Producers only. */
   'sfu.pauseProducer': {
     request: z.object({ producerId: Id, paused: z.boolean() }),
