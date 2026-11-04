@@ -106,7 +106,10 @@ export function App() {
           <button disabled={!name.trim()} onClick={() => run(() => join(null, name))}>
             Create room
           </button>{' '}
-          <button disabled={!name.trim()} onClick={() => run(() => join(null, name, 'sfu'))}>
+          <button
+            disabled={!name.trim()}
+            onClick={() => run(() => join(null, name, { mode: 'sfu', loopback: true }))}
+          >
             SFU loopback test
           </button>
           <p>

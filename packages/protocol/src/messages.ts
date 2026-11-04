@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { SfuEvents, SfuRequests } from './sfu.js';
+import { ProducerInfo, SfuEvents, SfuRequests } from './sfu.js';
 
 export const SessionHello = z.object({
   protocolVersions: z.array(z.number().int().positive()).min(1).max(10),
@@ -42,6 +42,8 @@ export const RoomSnapshot = z.object({
   members: z.array(Member),
   /** SFU rooms: the Router's RTP capabilities, opaque here, loaded by mediasoup-client. */
   routerRtpCapabilities: z.record(z.string(), z.unknown()).optional(),
+  /** SFU rooms: everyone else's current Producers; later ones arrive as sfu.newProducer. */
+  producers: z.array(ProducerInfo).optional(),
 });
 export type RoomSnapshot = z.infer<typeof RoomSnapshot>;
 

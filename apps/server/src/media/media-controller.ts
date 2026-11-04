@@ -1,4 +1,11 @@
-import type { EventPayload, RequestPayload, ResponsePayload } from '@ts-rtc/protocol';
+import type {
+  EventPayload,
+  ProducerInfo,
+  ProducerSource,
+  RequestPayload,
+  ResponsePayload,
+  SignalingEvent,
+} from '@ts-rtc/protocol';
 
 /** mediasoup parameters as plain JSON (RTP capabilities, ICE/DTLS/RTP parameters). */
 export type Json = Record<string, unknown>;
@@ -9,6 +16,11 @@ export type MediaKind = RequestPayload<'sfu.produce'>['kind'];
 export type TransportParams = ResponsePayload<'sfu.createTransport'>;
 export type ConsumerParams = ResponsePayload<'sfu.consume'>;
 export type TransportCloseReason = EventPayload<'sfu.transportClosed'>['reason'];
+/** What the media module tells one participant on its own (the room delivers it). */
+export type MediaEvent = Extract<
+  SignalingEvent,
+  { type: 'sfu.transportClosed' | 'sfu.consumerClosed' }
+>;
 
 /** Live mediasoup objects, counted from their own create/close events: leaks show up here. */
 export interface MediaCounts {
@@ -50,25 +62,24 @@ export interface MediaController {
     participantId: string,
     transportId: string,
     kind: MediaKind,
+    source: ProducerSource,
     rtpParameters: Json,
-  ): Promise<string>;
+  ): Promise<ProducerInfo>;
+  /** Consumers start paused: call resumeConsumer once the client has attached the track. */
   consume(
     participantId: string,
     transportId: string,
     producerId: string,
     rtpCapabilities: Json,
   ): Promise<ConsumerParams>;
+  resumeConsumer(participantId: string, consumerId: string): Promise<void>;
+  pauseProducer(participantId: string, producerId: string, paused: boolean): Promise<void>;
+  /** The room's open Producers, for the join snapshot. */
+  producers(roomId: string): ProducerInfo[];
   /** Closes the participant's transports (and so its Producers and Consumers). Idempotent. */
   closeParticipant(participantId: string): void;
-  /** The server closed a transport on its own (the participant should hear about it). */
-  onTransportClosed(
-    listener: (
-      roomId: string,
-      participantId: string,
-      transportId: string,
-      reason: TransportCloseReason,
-    ) => void,
-  ): void;
+  /** Events for one participant (transport closed by the server, Consumer lost its Producer). */
+  onEvent(listener: (roomId: string, participantId: string, event: MediaEvent) => void): void;
   counts(): MediaCounts;
   /** False once Workers die faster than they may be restarted: /readyz answers 503. */
   readonly healthy: boolean;

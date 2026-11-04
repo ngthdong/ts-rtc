@@ -11,13 +11,15 @@ import {
 
 test.afterEach(closePages);
 
+const MESH = '/?mode=mesh'; // new rooms default to the SFU since Stage 11
+
 test('four browsers in a full mesh: everyone receives everyone; mute is visible', async ({
   browser,
 }) => {
-  const pages = [await openApp(browser)];
+  const pages = [await openApp(browser, MESH)];
   const roomId = await join(pages[0] as Page, 'P0', null);
   for (let i = 1; i < 4; i++) {
-    const page = await openApp(browser);
+    const page = await openApp(browser, MESH);
     await join(page, `P${String(i)}`, roomId);
     pages.push(page);
   }
@@ -33,9 +35,9 @@ test('four browsers in a full mesh: everyone receives everyone; mute is visible'
 });
 
 test('three browsers joining at the same moment all connect', async ({ browser }) => {
-  const host = await openApp(browser);
+  const host = await openApp(browser, MESH);
   const roomId = await join(host, 'Host', null);
-  const others = await Promise.all([1, 2, 3].map(() => openApp(browser)));
+  const others = await Promise.all([1, 2, 3].map(() => openApp(browser, MESH)));
   await Promise.all(others.map((page, i) => join(page, `J${String(i)}`, roomId)));
   for (const page of [host, ...others]) await expectConnected(page, 3);
 });
@@ -43,7 +45,7 @@ test('three browsers joining at the same moment all connect', async ({ browser }
 test('turning the camera on mid-call renegotiates and video starts flowing', async ({
   browser,
 }) => {
-  const alice = await openApp(browser);
+  const alice = await openApp(browser, MESH);
   const roomId = await join(alice, 'Alice', null);
   // Bob's first getUserMedia with video fails, so he joins audio-only.
   const bob = await newPage(browser);
@@ -58,7 +60,7 @@ test('turning the camera on mid-call renegotiates and video starts flowing', asy
       return original(constraints);
     };
   });
-  await bob.goto('/');
+  await bob.goto(MESH);
   await join(bob, 'Bob', roomId);
   await expectConnected(alice, 1);
   await expect(alice.getByTestId('camera-off')).toHaveCount(1);
@@ -77,9 +79,9 @@ test('churn: random joins and leaves leave no peer connection or track behind', 
   let state = seed;
   const random = () => (state = (state * 48_271) % 2_147_483_647) / 2_147_483_647;
 
-  const host = await openApp(browser);
+  const host = await openApp(browser, MESH);
   const roomId = await join(host, 'Host', null); // stays, so the room never empties
-  const pages = await Promise.all([1, 2, 3].map(() => openApp(browser)));
+  const pages = await Promise.all([1, 2, 3].map(() => openApp(browser, MESH)));
   const inRoom = new Set<Page>();
   for (let step = 0; step < 20; step++) {
     const page = pages[Math.floor(random() * pages.length)] as Page;

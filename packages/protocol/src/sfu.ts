@@ -5,6 +5,18 @@ const Opaque = z.record(z.string(), z.unknown());
 const Id = z.string().min(1).max(64);
 export const MediaKind = z.enum(['audio', 'video']);
 export type MediaKind = z.infer<typeof MediaKind>;
+/** What a Producer carries; at most one Producer per source and participant. */
+export const ProducerSource = z.enum(['mic', 'camera']);
+export type ProducerSource = z.infer<typeof ProducerSource>;
+
+/** A Producer as other members learn about it: in the join snapshot and in sfu.newProducer. */
+export const ProducerInfo = z.object({
+  producerId: Id,
+  participantId: Id,
+  kind: MediaKind,
+  source: ProducerSource,
+});
+export type ProducerInfo = z.infer<typeof ProducerInfo>;
 
 /** SFU requests. Every id names something the server checks the caller owns. */
 export const SfuRequests = {
@@ -22,7 +34,12 @@ export const SfuRequests = {
     response: z.object({}),
   },
   'sfu.produce': {
-    request: z.object({ transportId: Id, kind: MediaKind, rtpParameters: Opaque }),
+    request: z.object({
+      transportId: Id,
+      kind: MediaKind,
+      source: ProducerSource,
+      rtpParameters: Opaque,
+    }),
     response: z.object({ producerId: Id }),
   },
   'sfu.consume': {
@@ -32,11 +49,23 @@ export const SfuRequests = {
       producerId: Id,
       kind: MediaKind,
       rtpParameters: Opaque,
+      producerPaused: z.boolean(),
     }),
+  },
+  /** Consumers start paused; resume once the track is attached, so no key frame is lost. */
+  'sfu.resumeConsumer': { request: z.object({ consumerId: Id }), response: z.object({}) },
+  /** Mute: the Worker stops forwarding this Producer to everyone. Own Producers only. */
+  'sfu.pauseProducer': {
+    request: z.object({ producerId: Id, paused: z.boolean() }),
+    response: z.object({}),
   },
 } as const;
 
 export const SfuEvents = {
+  /** Another member started sending: consume it. Not sent to the producer itself. */
+  'sfu.newProducer': ProducerInfo,
+  /** A Consumer of yours ended because its Producer closed (its owner left or stopped). */
+  'sfu.consumerClosed': z.object({ consumerId: Id, reason: z.enum(['producer_closed']) }),
   /** The server closed one of your transports: never connected, DTLS failed, ICE gone 30 s. */
   'sfu.transportClosed': z.object({
     transportId: Id,

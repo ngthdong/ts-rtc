@@ -17,7 +17,7 @@ for (const relay of [false, true]) {
       relay && !process.env.TURN_SECRET,
       'needs coturn: set TURN_SECRET, docker compose up',
     );
-    const path = relay ? '/?relay' : '/';
+    const path = relay ? '/?mode=mesh&relay' : '/?mode=mesh';
     const alice = await openApp(browser, path);
     const roomId = await join(alice, 'Alice', null);
     const bob = await openApp(browser, path);

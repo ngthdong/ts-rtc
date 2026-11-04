@@ -42,6 +42,7 @@ const app = buildApp(log, {
   debugRoutes: config.NODE_ENV !== 'production',
   allowedOrigins: config.ALLOWED_ORIGINS,
   capacity: config.MESH_MAX_PARTICIPANTS,
+  sfuCapacity: config.SFU_MAX_PARTICIPANTS,
   // The session id is the pseudonymous userKey in TURN usernames.
   iceServersFor: (userKey) => [
     ...config.ICE_SERVERS,

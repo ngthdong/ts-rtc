@@ -7,9 +7,9 @@ test.afterEach(closePages);
 const mean = (values: number[]) => values.reduce((a, b) => a + b, 0) / values.length;
 
 async function call(browser: Parameters<typeof openApp>[0]): Promise<[Page, Page]> {
-  const alice = await openApp(browser);
+  const alice = await openApp(browser, '/?mode=mesh');
   const roomId = await join(alice, 'Alice', null);
-  const bob = await openApp(browser);
+  const bob = await openApp(browser, '/?mode=mesh');
   await join(bob, 'Bob', roomId);
   for (const page of [alice, bob]) await expectConnected(page, 1);
   return [alice, bob];

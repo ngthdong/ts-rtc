@@ -20,6 +20,8 @@ export interface SignalingOptions extends SessionOptions, RoomOptions {
   requestTimeoutMs: number;
   /** ICE servers (with fresh TURN credentials) handed to each client in session.welcome. */
   iceServersFor: (userKey: string) => IceServer[];
+  /** RoomOptions.capacity is for Mesh rooms; SFU rooms hold more. */
+  sfuCapacity: number;
   /** The SFU. Absent: Mesh rooms only. */
   media?: MediaController | undefined;
 }
@@ -31,6 +33,7 @@ export const defaultSignalingOptions: SignalingOptions = {
   requestTimeoutMs: 10_000,
   maxBufferedBytes: 1024 * 1024,
   capacity: 4,
+  sfuCapacity: 10,
   createdTtlMs: 10 * 60_000,
   emptyGraceMs: 60_000,
   iceServersFor: () => [],

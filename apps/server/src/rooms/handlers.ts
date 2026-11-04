@@ -1,4 +1,9 @@
-import { SignalingError, type LeaveReason, type RoomMode } from '@ts-rtc/protocol';
+import {
+  SignalingError,
+  type LeaveReason,
+  type RoomMode,
+  type RoomSnapshot,
+} from '@ts-rtc/protocol';
 import type { FastifyBaseLogger } from 'fastify';
 import type { MediaController } from '../media/media-controller.js';
 import type { RequestRouter } from '../router.js';
@@ -9,7 +14,7 @@ export class RoomRegistry {
   private readonly rooms = new Map<string, Room>();
 
   constructor(
-    private readonly options: RoomOptions,
+    private readonly options: RoomOptions & { sfuCapacity: number },
     private readonly log: FastifyBaseLogger,
     /** Absent: SFU rooms cannot be joined (tests and Mesh-only setups). */
     readonly media: MediaController | undefined,
@@ -18,10 +23,10 @@ export class RoomRegistry {
       const room = this.rooms.get(roomId);
       if (room) void room.executor.run(() => room.close('media_failure'));
     });
-    media?.onTransportClosed((roomId, participantId, transportId, reason) => {
+    media?.onEvent((roomId, participantId, { type, payload }) => {
       const room = this.rooms.get(roomId);
       void room?.executor.run(() => {
-        room.emitTo(participantId, 'sfu.transportClosed', { transportId, reason });
+        room.emitTo(participantId, type, payload);
       });
     });
   }
@@ -33,12 +38,22 @@ export class RoomRegistry {
     });
   }
 
+  /** SFU snapshots list everyone else's Producers, so a late joiner can consume them. */
+  withProducers(room: Room, snapshot: RoomSnapshot): RoomSnapshot {
+    if (room.mode !== 'sfu' || !this.media) return snapshot;
+    const others = this.media
+      .producers(room.id)
+      .filter((p) => p.participantId !== snapshot.participantId);
+    return { ...snapshot, producers: others };
+  }
+
   create(mode: RoomMode): Room {
     const onClosed = (closed: Room) => {
       this.rooms.delete(closed.id);
       if (closed.mode === 'sfu') this.media?.closeRouter(closed.id);
     };
-    const room = new Room(this.options, this.log, onClosed, mode);
+    const capacity = mode === 'sfu' ? this.options.sfuCapacity : this.options.capacity;
+    const room = new Room({ ...this.options, capacity }, this.log, onClosed, mode);
     this.rooms.set(room.id, room);
     return room;
   }
@@ -50,7 +65,7 @@ export class RoomRegistry {
 
 export function registerRoomHandlers(router: RequestRouter, rooms: RoomRegistry): void {
   router
-    .on('room.create', ({ mode = 'mesh' }) => ({ roomId: rooms.create(mode).id }))
+    .on('room.create', ({ mode = 'sfu' }) => ({ roomId: rooms.create(mode).id }))
     .on('room.join', ({ roomId, displayName }, { session }) => {
       const room = rooms.get(roomId);
       if (!room) throw new SignalingError('NOT_FOUND', 'room not found');
@@ -61,7 +76,7 @@ export function registerRoomHandlers(router: RequestRouter, rooms: RoomRegistry)
           // cannot close while we wait (closing is an executor task too).
           room.routerRtpCapabilities ??= await rooms.media.ensureRouter(room.id);
         }
-        return room.join(session, displayName);
+        return rooms.withProducers(room, room.join(session, displayName));
       });
     })
     .on('room.leave', async (_payload, { session }) => {
@@ -70,7 +85,7 @@ export function registerRoomHandlers(router: RequestRouter, rooms: RoomRegistry)
     })
     .on('room.sync', (_payload, { session }) => {
       const { room, participantId } = requireBinding(session);
-      return room.executor.run(() => room.snapshot(participantId));
+      return room.executor.run(() => rooms.withProducers(room, room.snapshot(participantId)));
     })
     .on('participant.update', async (state, { session }) => {
       const { room, participantId } = requireBinding(session);

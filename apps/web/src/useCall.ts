@@ -17,26 +17,36 @@ declare global {
       quality(): Record<string, PeerQuality>;
       /** Raw getStats() of the first peer: for recording test fixtures from any browser. */
       rawStats(): Promise<unknown[]>;
+      /** SFU: remote tracks shown in tiles; must be 2 × (members − 1), no orphans. */
+      receivedTracks(): number;
       /** Leak check: both must be 0 after leaving, and members − 1 / ≤ 2 during a call. */
       resources(): { openConnections: number; liveLocalTracks: number };
     };
   }
 }
 
+const params = new URLSearchParams(window.location.search);
 /** `?relay` forces every connection through TURN: the way to test TURN on one machine. */
-export const relayOnly = new URLSearchParams(window.location.search).has('relay');
+export const relayOnly = params.has('relay');
+/** New rooms use the SFU; `?mode=mesh` keeps Mesh (benchmarks, comparison). */
+export const defaultMode: RoomMode = params.get('mode') === 'mesh' ? 'mesh' : 'sfu';
+
+export interface JoinOptions {
+  mode?: RoomMode; // for a new room
+  loopback?: boolean; // SFU diagnostics: also receive yourself back
+}
 
 let currentMesh: MeshCall | null = null;
-let currentSfu: { session: SfuSession; self: string } | null = null;
+let currentSfu: SfuSession | null = null;
 let latestQuality: Record<string, PeerQuality> = {};
 if (import.meta.env.DEV) {
   window.__tsRtc = {
-    inboundBytes: async () =>
-      currentSfu
-        ? { [currentSfu.self]: await currentSfu.session.inboundBytes() }
-        : (currentMesh?.inboundBytes() ?? {}),
+    inboundBytes: () =>
+      currentSfu?.inboundBytes() ?? currentMesh?.inboundBytes() ?? Promise.resolve({}),
     quality: () => latestQuality,
     rawStats: () => currentMesh?.rawStats() ?? Promise.resolve([]),
+    receivedTracks: () =>
+      [...(currentSfu?.streams.values() ?? [])].reduce((n, s) => n + s.getTracks().length, 0),
     resources: () => ({
       openConnections: countOpenConnections(),
       liveLocalTracks: liveLocalTracks(),
@@ -69,7 +79,9 @@ export function useCall() {
   const refs = useRef<{ client: SignalingClient; rooms: RoomClient } | null>(null);
   const call = useRef<{
     mesh: MeshCall;
-    sfu?: SfuSession;
+    sfu: SfuSession;
+    sfuActive: boolean;
+    loopback: boolean;
     stream: MediaStream;
     poll: ReturnType<typeof setInterval>;
   } | null>(null);
@@ -78,11 +90,29 @@ export function useCall() {
   const stopCall = useCallback(() => {
     clearInterval(call.current?.poll);
     call.current?.mesh.close();
-    call.current?.sfu?.close();
+    call.current?.sfu.close();
     stopTracks(call.current?.stream ?? null);
     call.current = null;
     currentMesh = currentSfu = null;
     latestQuality = {};
+  }, []);
+
+  /** SFU tiles: one per member (yourself too in loopback), with whatever we receive of them. */
+  const showSfu = useCallback(() => {
+    const current = call.current;
+    const view = refs.current?.rooms.view;
+    if (!current?.sfuActive || !view) return;
+    const state = current.sfu.states.recv as RTCPeerConnectionState;
+    const shown = view.members.filter(
+      (m) => current.loopback || m.participantId !== view.participantId,
+    );
+    setRemotes(
+      shown.map(({ participantId }) => ({
+        participantId,
+        stream: current.sfu.streams.get(participantId) ?? null,
+        state,
+      })),
+    );
   }, []);
 
   const endCall = useCallback(() => {
@@ -103,7 +133,11 @@ export function useCall() {
       rooms.subscribe(() => {
         setRoom(rooms.view);
         setClosedReason(rooms.closedReason);
-        if (!rooms.view) endCall(); // left, or closed by the server
+        if (rooms.view) {
+          showSfu(); // members changed: SFU tiles follow the member list
+        } else {
+          endCall(); // left, or closed by the server
+        }
       }),
     ];
     return () => {
@@ -112,14 +146,14 @@ export function useCall() {
       client.close();
       refs.current = null;
     };
-  }, [stopCall, endCall]);
+  }, [stopCall, endCall, showSfu]);
 
   /** Joins `roomId`, or a new room when it is null. Media is acquired before joining. */
   const join = useCallback(
-    async (roomId: string | null, displayName: string, mode: RoomMode = 'mesh') => {
+    async (roomId: string | null, displayName: string, options: JoinOptions = {}) => {
       if (!refs.current) return;
       const { client, rooms } = refs.current;
-      const target = roomId ?? (await rooms.create(mode));
+      const target = roomId ?? (await rooms.create(options.mode ?? defaultMode));
       const media = await getLocalMedia();
       setLocal(media.stream);
       setMediaError(media.error);
@@ -130,20 +164,23 @@ export function useCall() {
         iceServers: client.snapshot.iceServers,
         iceTransportPolicy: relayOnly ? 'relay' : 'all',
       });
+      // Both listen from before the join (no early offer or newProducer is lost); the room's
+      // mode decides which one starts.
       const mesh = new MeshCall(client, media.stream, ice);
+      const sfu = new SfuSession(client, ice(), showSfu);
       let ticks = 0;
       const poll = setInterval(() => {
-        const sample = currentSfu
-          ? currentSfu.session
-              .sampleQuality()
-              .then((q) => (q ? { [currentSfu?.self ?? '']: q } : {}))
+        const current = call.current;
+        const sample = current?.sfuActive
+          ? sfu.sampleQuality().then((q): Record<string, PeerQuality> => (q ? { sfu: q } : {}))
           : mesh.sampleQuality();
         void sample.then((q) => {
           setQuality((latestQuality = q));
-          if (!currentSfu && ++ticks % 5 === 0) mesh.reportQuality(); // every 10 s
+          if (!current?.sfuActive && ++ticks % 5 === 0) mesh.reportQuality(); // every 10 s
         });
       }, 2_000);
-      call.current = { mesh, stream: media.stream, poll };
+      const loopback = options.loopback ?? false;
+      call.current = { mesh, sfu, sfuActive: false, loopback, stream: media.stream, poll };
       currentMesh = mesh;
       mesh.subscribe(() => {
         setRemotes(mesh.view);
@@ -152,19 +189,11 @@ export function useCall() {
         await rooms.join(target, displayName);
         const view = rooms.view;
         if (view?.mode === 'mesh') mesh.start(view);
-        if (view?.mode === 'sfu' && view.routerRtpCapabilities) {
-          // Stage 10: the SFU path, tested with yourself (loopback). Others' media: Stage 11.
-          let echo: MediaStream | null = null;
-          const show = () => {
-            const state = (call.current?.sfu?.states.recv ?? 'new') as RTCPeerConnectionState;
-            setRemotes([{ participantId: view.participantId, stream: echo, state }]);
-          };
-          const sfu = await SfuSession.start(client, view.routerRtpCapabilities, ice(), show);
-          if (call.current?.mesh !== mesh) return sfu.close(); // left meanwhile
-          call.current.sfu = sfu;
-          currentSfu = { session: sfu, self: view.participantId };
-          echo = await sfu.loopback(media.stream.getTracks());
-          show();
+        if (view?.mode === 'sfu') {
+          call.current.sfuActive = true;
+          currentSfu = sfu;
+          showSfu();
+          await sfu.start(view, media.stream.getTracks(), loopback);
         }
         const state = muteState(media.stream);
         setMuted(state);
@@ -174,19 +203,30 @@ export function useCall() {
         throw err;
       }
     },
-    [endCall],
+    [endCall, showSfu],
   );
 
   /**
-   * Mute/unmute keeps the track (and the m-line) and sends silence or black frames. A device
-   * the call started without is acquired now and added to every peer (renegotiation).
+   * Mute/unmute keeps the track (and the m-line) and sends silence or black frames; in SFU
+   * rooms the Producer is also paused on the server. A device the call started without is
+   * acquired now: Mesh adds it to every peer (renegotiation), SFU produces it.
    */
   const toggle = useCallback(async (kind: 'audio' | 'video') => {
     const current = call.current;
     if (!current || !refs.current) return;
     const track = current.stream.getTracks().find((t) => t.kind === kind);
-    if (track) track.enabled = !track.enabled;
-    else current.mesh.addLocalTrack(await getTrack(kind));
+    if (track) {
+      track.enabled = !track.enabled;
+      if (current.sfuActive) await current.sfu.setPaused(kind, !track.enabled);
+    } else {
+      const added = await getTrack(kind);
+      if (current.sfuActive) {
+        current.stream.addTrack(added);
+        await current.sfu.produce(added);
+      } else {
+        current.mesh.addLocalTrack(added);
+      }
+    }
     const state = muteState(current.stream);
     setMuted(state);
     await refs.current.rooms.setMuted(state);
