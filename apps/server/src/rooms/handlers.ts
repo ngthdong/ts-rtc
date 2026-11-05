@@ -1,4 +1,6 @@
+import { setTimeout as sleep } from 'node:timers/promises';
 import {
+  CloseCode,
   SignalingError,
   type EventPayload,
   type LeaveReason,
@@ -14,12 +16,25 @@ import type { RequestContext, RequestRouter } from '../router.js';
 import type { Session } from '../session.js';
 import { Room, type Binding, type RoomOptions } from './room.js';
 
+/** A lost Router is replaced on another Worker, or on the dead one's replacement (2 s): 5 s. */
+const ROUTER_ATTEMPTS = 20;
+const ROUTER_RETRY_MS = 250;
+
+export interface RegistryOptions extends RoomOptions {
+  sfuCapacity: number;
+  /** A member whose socket dropped keeps its place (and media) this long, to resume. */
+  reconnectGraceMs: number;
+}
+
 /** Live calls of durable rooms: a Room exists while its call does, under the room's id. */
 export class RoomRegistry {
   private readonly rooms = new Map<string, Room>();
+  /** Grace periods running; dropped on shutdown (no leave after the media is gone). */
+  private readonly graceTimers = new Set<NodeJS.Timeout>();
+  private disposed = false;
 
   constructor(
-    private readonly options: RoomOptions & { sfuCapacity: number },
+    private readonly options: RegistryOptions,
     private readonly log: FastifyBaseLogger,
     /** Who the user is, and the durable room as that user sees it. */
     readonly directory: Directory,
@@ -28,7 +43,7 @@ export class RoomRegistry {
   ) {
     media?.onRouterLost((roomId) => {
       const room = this.rooms.get(roomId);
-      if (room) void room.executor.run(() => room.close('media_failure'));
+      if (room) void room.executor.run(() => this.resetMedia(room));
     });
     media?.onActiveSpeaker((roomId, participantId) => {
       const room = this.rooms.get(roomId);
@@ -51,8 +66,34 @@ export class RoomRegistry {
     });
   }
 
+  /** Socket dropped (not a leave): the membership waits for a resume, then leaves ('timeout'). */
+  disconnected(binding: Binding): Promise<void> {
+    const { room, participantId, epoch } = binding;
+    return room.executor.run(() => {
+      if (this.disposed || !room.markReconnecting(participantId, epoch)) return; // stale: a newer binding exists
+      const timer = setTimeout(() => {
+        this.graceTimers.delete(timer);
+        void this.leave(binding, 'timeout');
+      }, this.options.reconnectGraceMs);
+      timer.unref();
+      this.graceTimers.add(timer);
+    });
+  }
+
+  /** Server shutdown: every socket is closed, nobody will resume. */
+  dispose(): void {
+    this.disposed = true;
+    for (const timer of this.graceTimers) clearTimeout(timer);
+    this.graceTimers.clear();
+  }
+
+  /** The live call, if there is one. */
+  get(roomId: string): Room | undefined {
+    return this.rooms.get(roomId);
+  }
+
   /** SFU snapshots list everyone else's Producers, so a late joiner can consume them. */
-  withProducers(room: Room, snapshot: RoomSnapshot): RoomSnapshot {
+  withProducers<T extends RoomSnapshot>(room: Room, snapshot: T): T {
     if (room.mode !== 'sfu' || !this.media) return snapshot;
     const others = this.media
       .producers(room.id)
@@ -81,6 +122,38 @@ export class RoomRegistry {
     return room;
   }
 
+  /** In the room's executor: the Router to use from now on, its id in every snapshot. */
+  async ensureRouter(room: Room, media: MediaController): Promise<void> {
+    room.routerRtpCapabilities ??= await media.ensureRouter(room.id);
+    room.routerId = media.routerId(room.id);
+  }
+
+  /**
+   * The room's Worker died, and its media with it. Signaling is unaffected, so the call goes on
+   * with a new Router: members are told (sfu.mediaReset) and rebuild their media. A second
+   * death within a minute, or no Worker to move to, closes the room (room.closed media_failure).
+   */
+  private async resetMedia(room: Room): Promise<void> {
+    const now = Date.now();
+    room.mediaResets = [...room.mediaResets.filter((at) => now - at < 60_000), now];
+    room.routerRtpCapabilities = room.routerId = undefined;
+    if (room.members.length === 0) return; // the next join creates a Router
+    if (room.mediaResets.length > 1 || !this.media) return room.close('media_failure');
+    for (let attempt = 1; !room.routerRtpCapabilities; attempt++) {
+      try {
+        await this.ensureRouter(room, this.media);
+      } catch (err) {
+        if (attempt === ROUTER_ATTEMPTS) {
+          this.log.error({ roomId: room.id, err }, 'media.reset_failed');
+          return room.close('media_failure');
+        }
+        await sleep(ROUTER_RETRY_MS);
+      }
+    }
+    this.log.warn({ roomId: room.id, members: room.members.length }, 'media.reset');
+    room.broadcast('sfu.mediaReset', { routerRtpCapabilities: room.routerRtpCapabilities });
+  }
+
   /** Ends a live call for everyone (e.g. its durable room was deleted). None: nothing to do. */
   async close(roomId: string, reason: EventPayload<'room.closed'>['reason']): Promise<void> {
     const room = this.rooms.get(roomId);
@@ -101,9 +174,22 @@ export function registerRoomHandlers(router: RequestRouter, rooms: RoomRegistry)
           if (!rooms.media) throw new SignalingError('UNAVAILABLE', 'SFU is not enabled');
           // Inside the executor: two first joins cannot create two Routers, and the room
           // cannot close while we wait (closing is an executor task too).
-          room.routerRtpCapabilities ??= await rooms.media.ensureRouter(room.id);
+          await rooms.ensureRouter(room, rooms.media);
         }
-        return rooms.withProducers(room, room.join(session, user.displayName));
+        return rooms.withProducers(room, room.join(session, user.displayName, user.id));
+      });
+    })
+    .on('room.resume', ({ resumeToken }, { session }) => {
+      const user = requireUser(session);
+      const [roomId = '', participantId = '', secret = ''] = resumeToken.split('.');
+      const room = rooms.get(roomId);
+      if (!room) throw new SignalingError('NOT_FOUND', 'session expired: join the room again');
+      return room.executor.run(() => {
+        const result = rooms.withProducers(
+          room,
+          room.resume(session, participantId, secret, user.id),
+        );
+        return { ...result, transportIds: rooms.media?.transportsOf(participantId) ?? [] };
       });
     })
     .on('room.leave', async (_payload, { session }) => {
@@ -153,8 +239,14 @@ export function inRoom<T>(
   });
 }
 
-export function leaveOnDisconnect(session: Session, rooms: RoomRegistry): void {
-  if (session.binding) void rooms.leave(session.binding, 'disconnected');
+/**
+ * A normal close (1000) is the client saying goodbye (tab closed, reload): it leaves now, so
+ * nobody sees a "reconnecting" tile for 30 s. Any other close may be a drop: it may resume.
+ */
+export function leaveOnDisconnect(session: Session, rooms: RoomRegistry, code: number): void {
+  if (!session.binding) return;
+  if (code === CloseCode.Normal) void rooms.leave(session.binding, 'left');
+  else void rooms.disconnected(session.binding);
 }
 
 export function requireBinding(session: Session): Binding {

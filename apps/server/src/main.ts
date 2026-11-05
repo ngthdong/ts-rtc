@@ -61,6 +61,7 @@ const app = buildApp(log, {
   allowedOrigins: config.ALLOWED_ORIGINS,
   capacity: config.MESH_MAX_PARTICIPANTS,
   sfuCapacity: config.SFU_MAX_PARTICIPANTS,
+  reconnectGraceMs: config.RECONNECT_GRACE_MS,
   directory: postgresDirectory(db, tokens),
   api: {
     db,

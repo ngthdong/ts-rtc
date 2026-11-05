@@ -39,6 +39,10 @@ export function buildApp(log: FastifyBaseLogger, options: AppOptions = {}): App 
       live: media.counts(),
       workers: await media.inspect(),
     }));
+    // Failure injection (E2E): the server closes a transport, as a DTLS failure would.
+    http.post<{ Params: { id: string } }>('/debug/media/transports/:id/close', (req, reply) =>
+      media.closeTransport(req.params.id) ? reply.code(204).send() : reply.code(404).send(),
+    );
   }
 
   const signaling = attachSignaling(http.server, log, { ...defaultSignalingOptions, ...options });

@@ -1,4 +1,10 @@
-import type { MediaKind, ProducerInfo, ProducerSource, RoomSnapshot } from '@ts-rtc/protocol';
+import {
+  SignalingError,
+  type MediaKind,
+  type ProducerInfo,
+  type ProducerSource,
+  type RoomSnapshot,
+} from '@ts-rtc/protocol';
 import { Device, type types } from 'mediasoup-client';
 import type { SignalingClient } from '../signaling/SignalingClient.js';
 import { StatsCollector, type PeerQuality } from '../stats/quality.js';
@@ -6,6 +12,13 @@ import { StatsCollector, type PeerQuality } from '../stats/quality.js';
 type Direction = 'send' | 'recv';
 type Ice = { iceServers: RTCIceServer[]; iceTransportPolicy: RTCIceTransportPolicy };
 const sourceOf = (kind: string): ProducerSource => (kind === 'audio' ? 'mic' : 'camera');
+/** What the session reports to the RecoveryManager on its own. */
+export type MediaTrouble = 'media_reset' | 'transport_closed' | 'ice_stuck';
+/** ICE disconnected this long counts as stuck (it often comes back on its own sooner). */
+const ICE_STUCK_MS = 5_000;
+/** A retryable consume failure (TIMEOUT, UNAVAILABLE, …) is tried this often in all. */
+const CONSUME_ATTEMPTS = 3;
+const CONSUME_RETRY_MS = 500;
 
 /**
  * Camera simulcast: three layers in one m-line; mediasoup forwards each receiver the best layer
@@ -30,16 +43,29 @@ export class SfuSession {
   private readonly device = new Device();
   private readonly transports = new Map<Direction, types.Transport>();
   private readonly producers = new Map<ProducerSource, types.Producer>();
-  private readonly consumers = new Map<string, { consumer: types.Consumer; tile: string }>();
+  private readonly consumers = new Map<
+    string,
+    { consumer: types.Consumer; tile: string; info: ProducerInfo }
+  >();
+  /** Producers consumed or being consumed: a snapshot and an event may both name one. */
+  private readonly consuming = new Set<string>();
   private readonly stats = new StatsCollector();
   private held: ProducerInfo[] | null = [];
   private readonly unsubscribe: () => void;
+  private readonly stuck = new Set<Direction>();
+  private readonly stuckTimers = new Map<Direction, ReturnType<typeof setTimeout>>();
+  private self = '';
+  private loopback = false;
+  private closed = false;
+  /** The Router this session's transports live on (from the snapshot it started with). */
+  routerId: string | undefined;
 
   constructor(
     private readonly signaling: Pick<SignalingClient, 'request' | 'onEvent'>,
     private readonly ice: Ice,
     private readonly onChange: () => void,
     private readonly simulcast = true,
+    private readonly onTrouble: (trouble: MediaTrouble) => void = () => undefined,
   ) {
     this.unsubscribe = signaling.onEvent((event) => {
       if (event.type === 'sfu.newProducer') {
@@ -47,12 +73,35 @@ export class SfuSession {
         else void this.consume(event.payload);
       }
       if (event.type === 'sfu.consumerClosed') this.drop(event.payload.consumerId);
+      if (event.type === 'sfu.transportClosed') {
+        if (this.transportIds().includes(event.payload.transportId)) {
+          this.onTrouble('transport_closed');
+        }
+      }
+      if (event.type === 'sfu.mediaReset') this.onTrouble('media_reset');
     });
+  }
+
+  transportIds(): string[] {
+    return [...this.transports.values()].map((t) => t.id);
+  }
+
+  /** Our transports live on the snapshot's Router (a new one: its Worker died while away). */
+  builtFor(snapshot: RoomSnapshot): boolean {
+    return snapshot.routerId === this.routerId;
+  }
+
+  /** A transport's ICE has been disconnected for 5 s, or has failed. */
+  get iceStuck(): boolean {
+    return this.stuck.size > 0;
   }
 
   /** Sends `tracks`, receives everyone already producing, then whatever comes next. */
   async start(snapshot: RoomSnapshot, tracks: MediaStreamTrack[], loopback = false) {
     const { routerRtpCapabilities = {}, producers = [], participantId } = snapshot;
+    this.routerId = snapshot.routerId;
+    this.self = participantId;
+    this.loopback = loopback;
     await this.device.load({ routerRtpCapabilities });
     await this.transport('send');
     await this.transport('recv');
@@ -126,6 +175,33 @@ export class SfuSession {
     track?.dispatchEvent(new Event('ended'));
   }
 
+  /** New ICE parameters from the server, for both transports. */
+  async restartIce(): Promise<void> {
+    for (const transport of this.transports.values()) {
+      const { iceParameters } = await this.signaling.request('sfu.restartIce', {
+        transportId: transport.id,
+      });
+      await transport.restartIce({
+        iceParameters: iceParameters as unknown as types.IceParameters,
+      });
+    }
+  }
+
+  /**
+   * After a resume: newProducer and consumerClosed sent while we were away are lost. The
+   * snapshot's Producers are the truth: consume the new ones, drop Consumers of ended ones.
+   */
+  async reconcile(producers: ProducerInfo[]): Promise<void> {
+    const live = new Set(producers.map((p) => p.producerId));
+    for (const [consumerId, { info }] of this.consumers) {
+      const own = info.participantId === this.self; // loopback: not in the snapshot's list
+      if (!own && !live.has(info.producerId)) this.drop(consumerId);
+    }
+    for (const info of producers) {
+      if (this.loopback || info.participantId !== this.self) await this.consume(info);
+    }
+  }
+
   /** Mute: stop sending (client) and stop forwarding (server, so receivers see it at once). */
   async setPaused(kind: MediaKind, paused: boolean): Promise<void> {
     const producer = this.producers.get(sourceOf(kind));
@@ -184,6 +260,8 @@ export class SfuSession {
   }
 
   close(): void {
+    this.closed = true;
+    for (const timer of this.stuckTimers.values()) clearTimeout(timer);
     this.unsubscribe();
     this.producers.get('screen')?.track?.stop(); // not in the call's local stream
     for (const transport of this.transports.values()) transport.close();
@@ -191,17 +269,15 @@ export class SfuSession {
     this.streams.clear();
   }
 
-  private async consume({ producerId, participantId, source }: ProducerInfo): Promise<void> {
+  private async consume(info: ProducerInfo): Promise<void> {
+    const { producerId, participantId, source } = info;
     const tile = source === 'screen' ? `${participantId}#screen` : participantId;
     const recv = this.transports.get('recv');
-    if (!recv) return;
+    if (!recv || this.consuming.has(producerId)) return;
+    this.consuming.add(producerId);
     let consumerId: string | undefined;
     try {
-      const params = await this.signaling.request('sfu.consume', {
-        transportId: recv.id,
-        producerId,
-        rtpCapabilities: this.device.recvRtpCapabilities,
-      });
+      const params = await this.requestConsume(recv.id, producerId);
       const consumer = await recv.consume({
         id: params.consumerId,
         producerId,
@@ -209,14 +285,32 @@ export class SfuSession {
         rtpParameters: params.rtpParameters as unknown as types.RtpParameters,
       });
       consumerId = consumer.id;
-      this.consumers.set(consumer.id, { consumer, tile });
+      this.consumers.set(consumer.id, { consumer, tile, info });
       this.setTracks(tile, (tracks) => [...tracks, consumer.track]);
       // Paused on the server until now, so the first key frame reaches an attached track.
       await this.signaling.request('sfu.resumeConsumer', { consumerId: consumer.id });
     } catch (err) {
       // Its Producer closed meanwhile; sfu.consumerClosed may have come before we had it.
       if (consumerId) this.drop(consumerId);
+      this.consuming.delete(producerId);
       console.warn('sfu: consume failed (its producer may have just closed)', err);
+    }
+  }
+
+  /** sfu.consume, again on a retryable error (the server answers a repeat with the same one). */
+  private async requestConsume(transportId: string, producerId: string) {
+    for (let attempt = 1; ; attempt++) {
+      try {
+        return await this.signaling.request('sfu.consume', {
+          transportId,
+          producerId,
+          rtpCapabilities: this.device.recvRtpCapabilities,
+        });
+      } catch (err) {
+        const retry = err instanceof SignalingError && err.retryable && !this.closed;
+        if (!retry || attempt >= CONSUME_ATTEMPTS) throw err;
+        await new Promise((resolve) => setTimeout(resolve, CONSUME_RETRY_MS));
+      }
     }
   }
 
@@ -224,6 +318,7 @@ export class SfuSession {
     const entry = this.consumers.get(consumerId);
     if (!entry) return;
     this.consumers.delete(consumerId);
+    this.consuming.delete(entry.info.producerId);
     entry.consumer.close();
     this.setTracks(entry.tile, (tracks) => tracks.filter((t) => t !== entry.consumer.track));
   }
@@ -234,6 +329,20 @@ export class SfuSession {
     if (tracks.length > 0) this.streams.set(tile, new MediaStream(tracks));
     else this.streams.delete(tile);
     this.onChange();
+  }
+
+  /** failed: stuck now. disconnected: stuck if it lasts 5 s. connected again: not stuck. */
+  private watchIce(direction: Direction, state: string): void {
+    clearTimeout(this.stuckTimers.get(direction));
+    const markStuck = () => {
+      if (this.closed) return;
+      this.stuck.add(direction);
+      this.onTrouble('ice_stuck');
+    };
+    if (state === 'failed') markStuck();
+    else if (state === 'disconnected')
+      this.stuckTimers.set(direction, setTimeout(markStuck, ICE_STUCK_MS));
+    else if (state === 'connected') this.stuck.delete(direction);
   }
 
   private async transport(direction: Direction): Promise<types.Transport> {
@@ -266,6 +375,7 @@ export class SfuSession {
     });
     transport.on('connectionstatechange', (state) => {
       this.states[direction] = state;
+      this.watchIce(direction, state);
       this.onChange();
     });
     this.transports.set(direction, transport);

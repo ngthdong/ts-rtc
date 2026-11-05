@@ -37,6 +37,9 @@ export class MediasoupController implements MediaController {
   readonly closeProducer: MediaController['closeProducer'];
   readonly producers: MediaController['producers'];
   readonly closeParticipant: MediaController['closeParticipant'];
+  readonly restartIce: MediaController['restartIce'];
+  readonly transportsOf: MediaController['transportsOf'];
+  readonly closeTransport: MediaController['closeTransport'];
   readonly onEvent: MediaController['onEvent'];
   readonly counts: MediaController['counts'];
 
@@ -54,6 +57,9 @@ export class MediasoupController implements MediaController {
     this.closeProducer = transports.closeProducer.bind(transports);
     this.producers = transports.producers.bind(transports);
     this.closeParticipant = transports.closeParticipant.bind(transports);
+    this.restartIce = transports.restartIce.bind(transports);
+    this.transportsOf = transports.transportsOf.bind(transports);
+    this.closeTransport = transports.closeTransport.bind(transports);
     this.onEvent = transports.onEvent.bind(transports);
     this.counts = transports.counts.bind(transports);
   }
@@ -79,6 +85,10 @@ export class MediasoupController implements MediaController {
       entry.catch(forget);
     }
     return entry.then(({ router }) => router.rtpCapabilities as unknown as RtpCapabilities);
+  }
+
+  routerId(roomId: string): string | undefined {
+    return this.created.get(roomId)?.router.id;
   }
 
   closeRouter(roomId: string): void {

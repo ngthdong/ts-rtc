@@ -30,6 +30,13 @@ declare global {
       sendLayers(): Promise<{ rid: string; bytes: number; width: number | null }[]>;
       receivedWidths(): Promise<Record<string, number>>;
       resources(): { openConnections: number; liveLocalTracks: number };
+      participantId(): string | null;
+      recoveryLog(): string[];
+      dropSignaling(holdMs: number): void;
+      restartIce(): Promise<void>;
+      transportIds(): string[];
+      routerId(): string | null;
+      tokens(): { resumeToken: string | null; accessToken: string | null };
     };
   }
 }
@@ -43,9 +50,24 @@ export async function newPage(browser: Browser): Promise<Page> {
   return context.newPage();
 }
 
+/**
+ * What closing a tab does: the page goes away first, so the app says goodbye (close 1000) and
+ * leaves at once. context.close() alone kills the page without pagehide: to the server that is
+ * a dropped connection, and the member would stay "reconnecting" for the 30 s grace.
+ */
+export async function closeTab(page: Page): Promise<void> {
+  await page.goto('about:blank').catch(() => undefined); // already closed: nothing to say
+  await page.context().close();
+}
+
 /** Call from test.afterEach: a call left running would eat the CPU of the next test. */
 export async function closePages(): Promise<void> {
-  await Promise.all(contexts.splice(0).map((context) => context.close()));
+  await Promise.all(
+    contexts.splice(0).map(async (context) => {
+      await Promise.all(context.pages().map((page) => closeTab(page)));
+      await context.close();
+    }),
+  );
 }
 
 /** Opens the app: the login page (a new context is signed out), or the call page, ready. */

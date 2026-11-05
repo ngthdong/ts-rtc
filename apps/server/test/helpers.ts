@@ -48,13 +48,16 @@ export class TestDirectory implements Directory {
   }
 }
 
-/** A test server; `directory` is the TestDirectory in use unless `options.directory` is given. */
+/**
+ * A test server; `directory` is the TestDirectory in use unless `options.directory` is given.
+ * A dropped socket's member is removed after 100 ms (production: 30 s), unless overridden.
+ */
 export async function startServer(
   options: AppOptions = {},
   log: FastifyBaseLogger = pino({ level: 'silent' }),
 ) {
   const directory = new TestDirectory();
-  const app: App = buildApp(log, { directory, ...options });
+  const app: App = buildApp(log, { directory, reconnectGraceMs: 100, ...options });
   await app.http.listen({ host: '127.0.0.1', port: 0 });
   const host = `127.0.0.1:${(app.http.server.address() as AddressInfo).port}`;
   return { app, host, directory };

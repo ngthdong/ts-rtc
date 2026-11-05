@@ -12,8 +12,10 @@ import {
   type ResponsePayload,
   type SignalingEvent,
 } from '@ts-rtc/protocol';
+import { backoffMs, RECONNECT, shouldReconnect } from './ReconnectPolicy.js';
 
-export type ConnectionStatus = 'connecting' | 'ready' | 'closed';
+/** reconnecting: the socket dropped and another attempt is scheduled; closed: no more attempts. */
+export type ConnectionStatus = 'connecting' | 'ready' | 'reconnecting' | 'closed';
 
 export interface SignalingSnapshot {
   status: ConnectionStatus;
@@ -38,6 +40,8 @@ export interface SignalingClientOptions {
   /** Sent in session.hello; without a valid one the server closes with 4401. */
   accessToken?: string | undefined;
   createSocket?: (url: string) => WebSocket;
+  /** The backoff's jitter (tests pass a fixed one). */
+  random?: () => number;
 }
 
 interface Pending {
@@ -50,10 +54,17 @@ interface Pending {
 const OPEN = 1;
 const MAX_MISSED_HEARTBEATS = 2;
 
+/**
+ * One logical connection over a series of sockets: a dropped socket (no close code, or one
+ * that is not final) is replaced with backoff. A new socket is a new session (a new sessionId
+ * in the snapshot); the room membership is resumed by RoomClient (room.resume), not here.
+ */
 export class SignalingClient {
-  private readonly ws: WebSocket;
+  private ws: WebSocket | null = null;
   private readonly requestTimeoutMs: number;
   private readonly accessToken: string | undefined;
+  private readonly createSocket: (url: string) => WebSocket;
+  private readonly random: () => number;
   private readonly pending = new Map<string, Pending>();
   private readonly listeners = new Set<() => void>();
   private readonly eventListeners = new Set<(event: SignalingEvent) => void>();
@@ -62,20 +73,23 @@ export class SignalingClient {
   private nextId = 0;
   private heartbeat: ReturnType<typeof setInterval> | undefined;
   private missedHeartbeats = 0;
+  /** Failed attempts since the last greeted socket. */
+  private attempts = 0;
+  private retry: ReturnType<typeof setTimeout> | undefined;
+  private stopped = false;
+  /** drop(): no new socket before this time (a simulated outage). */
+  private blockedUntil = 0;
 
-  constructor(url: string, options: SignalingClientOptions = {}) {
+  constructor(
+    private readonly url: string,
+    options: SignalingClientOptions = {},
+  ) {
     this.requestTimeoutMs = options.requestTimeoutMs ?? 5_000;
     this.accessToken = options.accessToken;
-    this.ws = (options.createSocket ?? ((u) => new WebSocket(u)))(url);
-    this.ws.onopen = () => {
-      void this.greet();
-    };
-    this.ws.onmessage = (event: MessageEvent) => {
-      this.onMessage(event.data);
-    };
-    this.ws.onclose = (event) => {
-      this.onClosed(event.code, event.reason || null);
-    };
+    this.createSocket = options.createSocket ?? ((u) => new WebSocket(u));
+    this.random = options.random ?? Math.random;
+    globalThis.addEventListener?.('online', this.retryNow);
+    this.connect();
   }
 
   get snapshot(): SignalingSnapshot {
@@ -101,7 +115,8 @@ export class SignalingClient {
     payload: RequestPayload<T>,
     timeoutMs = this.requestTimeoutMs,
   ): Promise<ResponsePayload<T>> {
-    if (this.ws.readyState !== OPEN) {
+    const ws = this.ws;
+    if (ws?.readyState !== OPEN) {
       return Promise.reject(new SignalingError('UNAVAILABLE', 'not connected'));
     }
     const id = String(++this.nextId);
@@ -112,16 +127,51 @@ export class SignalingClient {
       }, timeoutMs);
       this.pending.set(id, { type, resolve: resolve as (p: unknown) => void, reject, timer });
       const message: ClientRequest = { v: PROTOCOL_VERSION, kind: 'req', id, type, payload };
-      this.ws.send(JSON.stringify(message));
+      ws.send(JSON.stringify(message));
     });
   }
 
   close(): void {
+    this.stopped = true;
+    globalThis.removeEventListener?.('online', this.retryNow);
     this.listeners.clear();
     this.eventListeners.clear();
-    this.detach();
-    this.ws.close(1000);
+    const ws = this.detach();
+    ws?.close(1000);
     this.onClosed(1000, 'closed by client');
+  }
+
+  /**
+   * Test hook: the network goes away for `ms`. The socket closes (so the server sees the drop
+   * at once) and no new one is opened before `ms` have passed.
+   */
+  drop(ms: number): void {
+    this.blockedUntil = Date.now() + ms;
+    const ws = this.detach();
+    ws?.close(4000, 'test: connection dropped');
+    this.onClosed(null, 'connection lost');
+  }
+
+  /** The browser is back online: try now instead of waiting out the backoff. */
+  private readonly retryNow = (): void => {
+    if (this.state.status !== 'reconnecting' || Date.now() < this.blockedUntil) return;
+    clearTimeout(this.retry);
+    this.connect();
+  };
+
+  private connect(): void {
+    const ws = this.createSocket(this.url);
+    this.ws = ws;
+    ws.onopen = () => {
+      void this.greet();
+    };
+    ws.onmessage = (event: MessageEvent) => {
+      this.onMessage(event.data);
+    };
+    ws.onclose = (event) => {
+      this.detach();
+      this.onClosed(event.code, event.reason || null);
+    };
   }
 
   private async greet(): Promise<void> {
@@ -131,7 +181,10 @@ export class SignalingClient {
         ...(this.accessToken && { accessToken: this.accessToken }),
       });
       const { sessionId, iceServers } = welcome;
-      this.update({ status: 'ready', sessionId, iceServers });
+      this.attempts = 0;
+      this.lastSeq = 0; // event seq is per session
+      this.missedHeartbeats = 0;
+      this.update({ status: 'ready', sessionId, iceServers, closeCode: null, closeReason: null });
       this.heartbeat = setInterval(() => {
         void this.beat();
       }, welcome.heartbeatIntervalMs);
@@ -199,26 +252,42 @@ export class SignalingClient {
     for (const listener of this.eventListeners) listener(event);
   }
 
+  /** The server stopped answering (hello or heartbeats): treat the socket as dropped. */
   private giveUp(reason: string): void {
-    this.detach();
-    this.ws.close();
+    this.detach()?.close();
     this.onClosed(null, reason);
   }
 
+  /** The socket is gone: another one after a backoff, unless the close is final. */
   private onClosed(code: number | null, reason: string | null): void {
     clearInterval(this.heartbeat);
+    clearTimeout(this.retry);
+    // Pending requests fail (UNAVAILABLE), never replayed: the caller knows what is still needed.
     for (const pending of this.pending.values()) {
       clearTimeout(pending.timer);
       pending.reject(new SignalingError('UNAVAILABLE', 'connection closed'));
     }
     this.pending.clear();
-    this.update({ status: 'closed', closeCode: code, closeReason: reason });
+    const again = !this.stopped && shouldReconnect(code) && this.attempts < RECONNECT.maxAttempts;
+    this.update({
+      status: again ? 'reconnecting' : 'closed',
+      closeCode: code,
+      closeReason: reason,
+    });
+    if (!again) return;
+    // drop(): not before the simulated outage is over.
+    const delay = Math.max(backoffMs(this.attempts++, this.random), this.blockedUntil - Date.now());
+    this.retry = setTimeout(() => {
+      this.connect();
+    }, delay);
   }
 
-  private detach(): void {
-    this.ws.onopen = null;
-    this.ws.onmessage = null;
-    this.ws.onclose = null;
+  /** Stops listening to the current socket; returns it (to close it), if any. */
+  private detach(): WebSocket | null {
+    const ws = this.ws;
+    this.ws = null;
+    if (ws) ws.onopen = ws.onmessage = ws.onclose = null;
+    return ws;
   }
 
   private update(patch: Partial<SignalingSnapshot>): void {

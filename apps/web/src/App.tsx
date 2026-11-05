@@ -129,13 +129,15 @@ function Call() {
         )}
       </p>
 
+      {!room && closedReason && (
+        <p role="status" data-testid="call-ended" style={{ color: 'darkorange' }}>
+          The call ended ({closedReason}).
+          {status === 'ready' && ' You can create or join another one.'}
+        </p>
+      )}
+
       {status === 'ready' && !room && (
         <section>
-          {closedReason && (
-            <p role="status" style={{ color: 'darkorange' }}>
-              The server closed the room ({closedReason}). You can create or join another one.
-            </p>
-          )}
           <label>
             <input
               type="checkbox"
@@ -249,8 +251,11 @@ function Call() {
                     {m?.displayName ?? 'unknown'}
                     {peer.participantId === room.participantId && ' (you, back from the SFU)'}
                     {m?.audioMuted && <span data-testid="muted"> · muted</span>}
-                    {m?.videoMuted && <span data-testid="camera-off"> · camera off</span>} ·{' '}
-                    <span data-testid="peer-state">{peer.state}</span>
+                    {m?.videoMuted && <span data-testid="camera-off"> · camera off</span>}
+                    {m?.connection === 'reconnecting' && (
+                      <span data-testid="reconnecting"> · reconnecting…</span>
+                    )}{' '}
+                    · <span data-testid="peer-state">{peer.state}</span>
                     <QualityInfo q={quality[peer.participantId]} state={peer.state} />
                   </figcaption>
                 </figure>

@@ -13,6 +13,8 @@ const Env = z
       .default('info'),
     /** Mesh sends one stream per peer from every browser, so rooms stay small. */
     MESH_MAX_PARTICIPANTS: z.coerce.number().int().min(2).max(10).default(4),
+    /** A member whose connection dropped may resume within this long (same tile, same media). */
+    RECONNECT_GRACE_MS: z.coerce.number().int().min(1_000).max(600_000).default(30_000),
     /** SFU rooms: every browser sends once, whatever the room size. */
     SFU_MAX_PARTICIPANTS: z.coerce.number().int().min(2).max(50).default(10),
     ALLOWED_ORIGINS: z

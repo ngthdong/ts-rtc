@@ -40,7 +40,7 @@ async function setup(
     const snapshot = await client.ok<RoomSnapshot>('room.join', { roomId });
     return { client, snapshot, roomId };
   };
-  return { media, join, directory: server.directory };
+  return { media, join, directory: server.directory, host: server.host };
 }
 
 const fakeDtls = {
@@ -183,7 +183,7 @@ test('leaving, disconnecting and Worker death all bring the counts back to zero'
   await fill(carol);
   const [worker] = await media.inspect();
   process.kill(worker?.pid ?? Number.NaN, 'SIGKILL');
-  await carol.client.waitForEvent('room.closed');
+  await carol.client.waitForEvent('sfu.mediaReset'); // the call goes on; its media is rebuilt
   expect(media.counts()).toEqual({ transports: 0, producers: 0, consumers: 0 });
 });
 
@@ -221,4 +221,28 @@ test('SFU requests outside an SFU room are refused', async () => {
     ok: false,
     error: { code: 'INVALID_STATE' },
   });
+});
+
+test('a resume lists the transports still alive; restartIce gives new ICE parameters', async () => {
+  const { host, directory } = await setup(22_070);
+  const client = await TestClient.greeted(host, 'Rita');
+  const roomId = directory.create('sfu');
+  const { resumeToken } = await client.ok<{ resumeToken: string }>('room.join', { roomId });
+  const send = await client.ok<Transport>('sfu.createTransport', { direction: 'send' });
+  const recv = await client.ok<Transport>('sfu.createTransport', { direction: 'recv' });
+  const restarted = await client.ok<{ iceParameters: { usernameFragment: string } }>(
+    'sfu.restartIce',
+    { transportId: send.transportId },
+  );
+  const before = send.iceParameters as { usernameFragment: string };
+  expect(restarted.iceParameters.usernameFragment).not.toBe(before.usernameFragment);
+
+  client.close();
+  const again = await TestClient.greeted(host, 'Rita');
+  const resumed = await again.ok<{ transportIds: string[] }>('room.resume', { resumeToken });
+  expect(resumed.transportIds.sort()).toEqual([send.transportId, recv.transportId].sort());
+  await again.ok('sfu.closeTransports', {}); // recovery's clean slate: nothing of ours is left
+  const after = await again.ok<RoomSnapshot>('room.sync', {});
+  expect(after.producers).toEqual([]);
+  expect(media?.transportsOf(after.participantId)).toEqual([]);
 });

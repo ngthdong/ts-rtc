@@ -41,6 +41,8 @@ const MEDIA_MATRIX: Record<MediaAction, string> = {
   'sfu.resumeConsumer': 'NYY',
   'sfu.closeProducer': 'NNY',
   'sfu.pauseProducer': 'NNY',
+  'sfu.restartIce': 'NYY', // transport ownership: the media module (NOT_FOUND)
+  'sfu.closeTransports': 'NYY', // own media only, by construction
 };
 
 test.each(Object.entries(MEDIA_MATRIX))('%s: %s', (action, expected) => {

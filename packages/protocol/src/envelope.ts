@@ -41,6 +41,8 @@ export const CloseCode = {
   /** No valid access token in session.hello: sign in again (like HTTP 401). */
   Unauthenticated: 4401,
   HandshakeTimeout: 4408,
+  /** Another connection resumed this session (room.resume): this one must not reconnect. */
+  Replaced: 4409,
 } as const;
 
 export const ClientRequest = z.object({

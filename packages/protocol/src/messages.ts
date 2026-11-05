@@ -26,8 +26,12 @@ export const SessionHeartbeatAck = z.object({ serverTime: z.number() });
 export const MuteState = z.object({ audioMuted: z.boolean(), videoMuted: z.boolean() });
 export type MuteState = z.infer<typeof MuteState>;
 
+/** reconnecting: the member's socket dropped; it has a grace period to resume (room.resume). */
+export const ConnectionState = z.enum(['connected', 'reconnecting']);
+export type ConnectionState = z.infer<typeof ConnectionState>;
+
 export const Member = z
-  .object({ participantId: z.string(), displayName: z.string() })
+  .object({ participantId: z.string(), displayName: z.string(), connection: ConnectionState })
   .extend(MuteState.shape);
 export type Member = z.infer<typeof Member>;
 
@@ -44,12 +48,26 @@ export const RoomSnapshot = z.object({
   members: z.array(Member),
   /** SFU rooms: the Router's RTP capabilities, opaque here, loaded by mediasoup-client. */
   routerRtpCapabilities: z.record(z.string(), z.unknown()).optional(),
+  /** SFU rooms: the Router in use. A new one (its Worker died) means media must be rebuilt. */
+  routerId: z.string().optional(),
   /** SFU rooms: everyone else's current Producers; later ones arrive as sfu.newProducer. */
   producers: z.array(ProducerInfo).optional(),
   /** SFU rooms: the current dominant speaker, if one is known and still here. */
   activeSpeaker: z.string().optional(),
 });
 export type RoomSnapshot = z.infer<typeof RoomSnapshot>;
+
+/** room.join and room.resume: the snapshot, plus what a later reconnect needs. */
+export const JoinResult = RoomSnapshot.extend({
+  /**
+   * `<room>.<participant>.<secret>`: room.resume on a new socket gets this membership back
+   * within the grace period. A new one on every join and resume; the previous one stops working.
+   */
+  resumeToken: z.string(),
+  /** room.resume in SFU rooms: your transports that still exist on the server. */
+  transportIds: z.array(z.string()).optional(),
+});
+export type JoinResult = z.infer<typeof JoinResult>;
 
 export const MeshSignal = z.union([
   z.object({
@@ -66,7 +84,8 @@ export const MeshSignal = z.union([
 ]);
 export type MeshSignal = z.infer<typeof MeshSignal>;
 
-export const LeaveReason = z.enum(['left', 'disconnected']);
+/** timeout: the connection dropped and no resume came within the grace period. */
+export const LeaveReason = z.enum(['left', 'timeout']);
 export type LeaveReason = z.infer<typeof LeaveReason>;
 
 const CandidateType = z.enum(['host', 'srflx', 'prflx', 'relay']);
@@ -102,6 +121,7 @@ export const Empty = z.object({});
 
 /** Rooms are created over HTTP (POST /api/rooms); the display name is the account's. */
 export const RoomJoin = z.object({ roomId: z.string().min(1).max(64) });
+export const RoomResume = z.object({ resumeToken: z.string().min(1).max(256) });
 export const RoomLeave = z.object({});
 export const RoomLeft = z.object({});
 export const RoomSync = z.object({});
@@ -109,7 +129,9 @@ export const RoomSync = z.object({});
 export const Requests = {
   'session.hello': { request: SessionHello, response: SessionWelcome },
   'session.heartbeat': { request: SessionHeartbeat, response: SessionHeartbeatAck },
-  'room.join': { request: RoomJoin, response: RoomSnapshot },
+  'room.join': { request: RoomJoin, response: JoinResult },
+  /** After a reconnect: the same participant, if its grace period is not over (else NOT_FOUND). */
+  'room.resume': { request: RoomResume, response: JoinResult },
   'room.leave': { request: RoomLeave, response: RoomLeft },
   'room.sync': { request: RoomSync, response: RoomSnapshot },
   'participant.update': { request: MuteState, response: Empty },
@@ -138,11 +160,17 @@ export const Events = {
     reason: LeaveReason,
   }),
   'participant.updated': z
-    .object({ roomSeq: z.number().int().positive(), participantId: z.string() })
+    .object({
+      roomSeq: z.number().int().positive(),
+      participantId: z.string(),
+      connection: ConnectionState,
+    })
     .extend(MuteState.shape),
   /** The room ended for everyone; members are no longer bound to it. No roomSeq: it is final. */
   'room.closed': z.object({ reason: z.enum(['media_failure', 'deleted']) }),
   'mesh.signal': z.object({ from: z.string(), signal: MeshSignal }),
+  /** Another connection resumed your session; this socket closes next (4409). */
+  'session.replaced': z.object({}),
   ...SfuEvents,
 } as const;
 

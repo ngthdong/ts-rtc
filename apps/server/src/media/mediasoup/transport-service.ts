@@ -43,6 +43,8 @@ export class TransportService {
   private readonly producerIndex = new Map<string, { roomId: string; info: ProducerInfo }>();
   private readonly live: MediaCounts = { transports: 0, producers: 0, consumers: 0 };
   private readonly listeners: Listener[] = [];
+  /** Closes a transport the way a failure does (event to its owner); by transport id. */
+  private readonly closers = new Map<string, (reason: TransportCloseReason) => void>();
 
   constructor(
     private readonly options: TransportOptions,
@@ -180,10 +182,9 @@ export class TransportService {
     if (source.info.participantId === participantId && !this.options.allowLoopback) {
       throw new SignalingError('FORBIDDEN', 'consuming your own producer is diagnostics only');
     }
+    // consume: idempotent per (participant, Producer), so a retried or reconciled consume is safe
     for (const existing of party.consumers.values()) {
-      if (existing.producerId === producerId) {
-        throw new SignalingError('CONFLICT', `already consuming it: ${existing.id}`);
-      }
+      if (existing.producerId === producerId) return toParams(existing);
     }
     if (party.consumers.size >= MAX_CONSUMERS) {
       throw new SignalingError('CAPACITY_EXCEEDED', `at most ${String(MAX_CONSUMERS)} consumers`);
@@ -202,7 +203,7 @@ export class TransportService {
       }
       throw new SignalingError('UNAVAILABLE', 'media server error, retry');
     }
-    const { id: consumerId, kind, rtpParameters, producerPaused } = consumer;
+    const consumerId = consumer.id;
     party.consumers.set(consumerId, consumer);
     this.live.consumers += 1;
     consumer.observer.once('close', () => {
@@ -216,7 +217,24 @@ export class TransportService {
         payload: { consumerId, reason: 'producer_closed' },
       });
     });
-    return { consumerId, producerId, kind, rtpParameters, producerPaused };
+    return toParams(consumer);
+  }
+
+  async restartIce(participantId: string, transportId: string): Promise<Json> {
+    const { transport } = this.owned(participantId, transportId);
+    const iceParameters = await transport.restartIce();
+    this.log.info({ participantId, transportId }, 'transport.ice_restart');
+    return { ...iceParameters };
+  }
+
+  transportsOf(participantId: string): string[] {
+    return [...(this.parties.get(participantId)?.transports.keys() ?? [])];
+  }
+
+  closeTransport(transportId: string): boolean {
+    const close = this.closers.get(transportId);
+    close?.('closed_by_server');
+    return close !== undefined;
   }
 
   async resumeConsumer(participantId: string, consumerId: string): Promise<void> {
@@ -284,6 +302,7 @@ export class TransportService {
         payload: { transportId: transport.id, reason },
       });
     };
+    this.closers.set(transport.id, close);
     const deadline = setTimeout(() => {
       if (transport.dtlsState !== 'connected') close('connect_timeout');
     }, this.options.connectDeadlineMs);
@@ -308,10 +327,16 @@ export class TransportService {
     transport.observer.once('close', () => {
       clearTimeout(deadline);
       clearTimeout(iceTimer);
+      this.closers.delete(transport.id);
       party.transports.delete(transport.id);
       party.connected.delete(transport.id);
       this.live.transports -= 1;
       log.info('transport.closed');
     });
   }
+}
+
+function toParams(consumer: types.Consumer): ConsumerParams {
+  const { id: consumerId, producerId, kind, rtpParameters, producerPaused } = consumer;
+  return { consumerId, producerId, kind, rtpParameters, producerPaused };
 }

@@ -75,5 +75,17 @@ export function registerSfuHandlers(router: RequestRouter, rooms: RoomRegistry):
         await media.pauseProducer(me, producerId, paused);
         return {};
       }),
+    )
+    .on('sfu.restartIce', ({ transportId }, ctx) =>
+      inSfuRoom({ ctx, action: 'sfu.restartIce' }, async (media, _room, me) => ({
+        iceParameters: await media.restartIce(me, transportId),
+      })),
+    )
+    // Others' Consumers of ours end (sfu.consumerClosed); the rebuild produces again.
+    .on('sfu.closeTransports', (_payload, ctx) =>
+      inSfuRoom({ ctx, action: 'sfu.closeTransports' }, (media, _room, me) => {
+        media.closeParticipant(me);
+        return Promise.resolve({});
+      }),
     );
 }

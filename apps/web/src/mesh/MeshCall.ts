@@ -93,6 +93,15 @@ export class MeshCall {
     for (const { from, signal } of held) this.onSignal(from, signal);
   }
 
+  /**
+   * After a resume: hang up on members who left while we were away. Members who joined meanwhile
+   * call us: their offers were held by the server and arrive with the resume.
+   */
+  reconcile(snapshot: RoomSnapshot): void {
+    const present = new Set(snapshot.members.map((m) => m.participantId));
+    for (const id of [...this.peers.keys()]) if (!present.has(id)) this.hangUp(id);
+  }
+
   close(): void {
     this.unsubscribe();
     for (const id of [...this.peers.keys()]) this.hangUp(id);
