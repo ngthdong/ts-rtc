@@ -46,6 +46,8 @@ export interface MediaController {
   ensureRouter(roomId: string): Promise<RtpCapabilities>;
   /** Idempotent; also safe while ensureRouter for the room is still in flight. */
   closeRouter(roomId: string): void;
+  /** The room's current Router, once created: a new id after a Worker died and it was replaced. */
+  routerId(roomId: string): string | undefined;
   /** Called with each room whose Router was lost because its Worker died. */
   onRouterLost(listener: (roomId: string) => void): void;
   /**
@@ -75,6 +77,12 @@ export interface MediaController {
   resumeConsumer(participantId: string, consumerId: string): Promise<void>;
   pauseProducer(participantId: string, producerId: string, paused: boolean): Promise<void>;
   closeProducer(participantId: string, producerId: string): void;
+  /** New ICE parameters for one of the caller's transports (client-side ICE restart). */
+  restartIce(participantId: string, transportId: string): Promise<Json>;
+  /** The participant's open transports: after a resume, the client rebuilds the missing ones. */
+  transportsOf(participantId: string): string[];
+  /** Closes a transport as if it had failed (its owner gets sfu.transportClosed). Dev route. */
+  closeTransport(transportId: string): boolean;
   /** The room's open Producers, for the join snapshot. */
   producers(roomId: string): ProducerInfo[];
   /** Closes the participant's transports (and so its Producers and Consumers). Idempotent. */

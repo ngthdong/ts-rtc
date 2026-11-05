@@ -114,7 +114,7 @@ test('one Producer per source, and the source must match the kind', async () => 
   ok(await alice.produce('video'));
 });
 
-test('consumers start paused; only their owner resumes them; a second consume is a conflict', async () => {
+test('consumers start paused; only their owner resumes them; a second consume is the same one', async () => {
   const { member } = await setup(22_120);
   const alice = await member();
   const bob = await member();
@@ -124,9 +124,8 @@ test('consumers start paused; only their owner resumes them; a second consume is
     await bob.consume(producerId),
   );
   expect(consumer.producerPaused).toBe(false);
-  const again = await bob.consume(producerId);
-  expect(again).toMatchObject({ ok: false, error: { code: 'CONFLICT' } });
-  expect(again.ok || again.error.message).toContain(consumer.consumerId);
+  const again = ok<{ consumerId: string }>(await bob.consume(producerId)); // retry, reconcile
+  expect(again.consumerId).toBe(consumer.consumerId);
   expect(
     await carol.client.request('sfu.resumeConsumer', { consumerId: consumer.consumerId }),
   ).toMatchObject({ ok: false, error: { code: 'NOT_FOUND' } }); // not Carol's
