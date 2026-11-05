@@ -10,6 +10,7 @@ test('uses defaults when nothing is set', () => {
     LOG_LEVEL: 'info',
     MESH_MAX_PARTICIPANTS: 4,
     SFU_MAX_PARTICIPANTS: 10,
+    RECONNECT_GRACE_MS: 30_000,
     ALLOWED_ORIGINS: ['http://localhost:5173'],
     ICE_SERVERS: [],
     MEDIA_LISTEN_IP: '127.0.0.1',
