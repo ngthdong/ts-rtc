@@ -1,9 +1,9 @@
-import type { RoomSnapshot, SignalingEvent } from '@ts-rtc/protocol';
+import { SignalingError, type RoomSnapshot, type SignalingEvent } from '@ts-rtc/protocol';
 import { expect, test, vi } from 'vitest';
 import type { SignalingClient } from '../signaling/SignalingClient.js';
 import { RoomClient } from './RoomClient.js';
 
-const unmuted = { audioMuted: false, videoMuted: false };
+const unmuted = { audioMuted: false, videoMuted: false, connection: 'connected' as const };
 const alice = { participantId: 'a', displayName: 'Alice', ...unmuted };
 const bob = { participantId: 'b', displayName: 'Bob', ...unmuted };
 const carol = { participantId: 'c', displayName: 'Carol', ...unmuted };
@@ -69,7 +69,57 @@ test('participant.updated changes only that member', async () => {
   await room.join('r');
   emit({
     type: 'participant.updated',
-    payload: { roomSeq: 3, participantId: 'b', audioMuted: true, videoMuted: false },
+    payload: {
+      roomSeq: 3,
+      participantId: 'b',
+      audioMuted: true,
+      videoMuted: false,
+      connection: 'connected',
+    },
   });
   expect(room.view?.members).toEqual([alice, { ...bob, audioMuted: true }]);
+});
+
+test('resume: the snapshot replaces the view; a refusal is null and forgets the token', async () => {
+  let resumes = 0;
+  const { room, signaling } = setup({
+    'room.join': () => ({ ...snapshot(1), resumeToken: 'r.a.one' }),
+    'room.resume': () => {
+      resumes += 1;
+      if (resumes === 1) return { ...snapshot(5, [alice, carol]), resumeToken: 'r.a.two' };
+      throw new SignalingError('NOT_FOUND', 'session expired: join the room again');
+    },
+  });
+  expect(await room.resume()).toBeNull(); // not in a room: nothing to resume
+  await room.join('r');
+  expect(room.resumeToken).toBe('r.a.one');
+  expect(await room.resume()).toMatchObject({ roomSeq: 5 });
+  expect(signaling.request).toHaveBeenLastCalledWith('room.resume', { resumeToken: 'r.a.one' });
+  expect(room.view).toEqual(snapshot(5, [alice, carol])); // no token in the view
+  expect(room.resumeToken).toBe('r.a.two'); // rotated
+  expect(await room.resume()).toBeNull();
+  expect(room.resumeToken).toBeNull();
+  expect(room.view).not.toBeNull(); // the caller decides: rejoin, or abandon
+});
+
+test('the resume token is used once: a resume lost in transit is not sent again', async () => {
+  const { room, signaling } = setup({
+    'room.join': () => ({ ...snapshot(1), resumeToken: 'r.a.one' }),
+    'room.resume': () => {
+      throw new SignalingError('UNAVAILABLE', 'connection closed');
+    },
+  });
+  await room.join('r');
+  await expect(room.resume()).rejects.toMatchObject({ code: 'UNAVAILABLE' });
+  expect(await room.resume()).toBeNull(); // next reconnect: nothing to resume with, so rejoin
+  expect(signaling.request).toHaveBeenCalledTimes(2); // join + one resume
+});
+
+test('expire (Mesh, grace over): the call ends and says why', async () => {
+  const { room } = setup({ 'room.join': () => ({ ...snapshot(1), resumeToken: 'r.a.one' }) });
+  await room.join('r');
+  room.expire();
+  expect(room.view).toBeNull();
+  expect(room.closedReason).toBe('session expired');
+  expect(room.resumeToken).toBeNull();
 });
