@@ -7,6 +7,9 @@ if (existsSync('../.env')) process.loadEnvFile('../.env');
 // Must match the server's PORT (see apps/server/src/config.ts).
 const apiPort = process.env.PORT ?? '4000';
 
+const SERIAL = /(sfu-.*|recovery)\.e2e\.ts$/;
+const OUTAGE = /Postgres down/;
+
 // Real browsers, real server, fake camera and microphone. Chromium only (scope v2).
 export default defineConfig({
   testMatch: '*.e2e.ts',
@@ -20,10 +23,12 @@ export default defineConfig({
     },
   },
   projects: [
-    { name: 'mesh', testIgnore: /sfu-.*\.e2e\.ts$/ },
-    // These assert the server-wide mediasoup counts (/debug/media): one test at a time.
-    // Mesh tests create no mediasoup objects, so they may run alongside.
-    { name: 'sfu', testMatch: /sfu-.*\.e2e\.ts$/, workers: 1 },
+    { name: 'mesh', testIgnore: SERIAL, grepInvert: OUTAGE },
+    // These assert the server-wide mediasoup counts (/debug/media), and recovery kills Workers:
+    // one test at a time. Mesh tests create no mediasoup objects, so they may run alongside.
+    { name: 'sfu', testMatch: SERIAL, workers: 1, grepInvert: OUTAGE },
+    // Stops Postgres for the whole server: alone, after everything else, or sign-ups elsewhere fail.
+    { name: 'outage', grep: OUTAGE, dependencies: ['mesh', 'sfu'] },
   ],
   webServer: [
     {

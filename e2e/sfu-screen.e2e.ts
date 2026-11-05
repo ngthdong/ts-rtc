@@ -1,5 +1,5 @@
 import { expect, test, type APIRequestContext, type Browser, type Page } from '@playwright/test';
-import { closePages, inboundBytes, join, newPage, openApp } from './helpers.js';
+import { closePages, closeTab, inboundBytes, join, newPage, openApp } from './helpers.js';
 
 test.afterEach(closePages);
 
@@ -78,7 +78,7 @@ test('one sharer per room; the lock is released when the sharer leaves', async (
   await expect(bob.getByRole('alert')).toHaveText('Alice is already sharing.');
   await expect(bob.getByRole('button', { name: 'Share screen' })).toBeVisible();
 
-  await alice.context().close(); // the sharer vanishes: the Producer and the lock go with it
+  await closeTab(alice); // the sharer leaves: the Producer and the lock go with it
   await expect(carol.getByTestId('screen')).toHaveCount(0);
   await expect.poll(() => producers(request)).toBe(4);
   await bob.getByRole('button', { name: 'Share screen' }).click();
