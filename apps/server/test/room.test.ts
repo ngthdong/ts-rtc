@@ -46,15 +46,18 @@ test('two clients see each other join and leave', async () => {
   });
 });
 
-test('closing the socket removes the participant with reason "disconnected"', async () => {
+test('a dropped socket: "reconnecting" first, removed with reason "timeout" after the grace', async () => {
   const alice = await TestClient.greeted(host, 'Alice');
   const bob = await TestClient.greeted(host, 'Bob');
   const roomId = createRoom();
   await alice.ok('room.join', { roomId });
   const b = await bob.ok<RoomSnapshot>('room.join', { roomId });
   bob.close();
+  expect(await alice.waitForEvent('participant.updated')).toMatchObject({
+    payload: { participantId: b.participantId, connection: 'reconnecting' },
+  });
   expect(await alice.waitForEvent('participant.left')).toMatchObject({
-    payload: { participantId: b.participantId, reason: 'disconnected' },
+    payload: { participantId: b.participantId, reason: 'timeout' },
   });
 });
 
@@ -90,8 +93,12 @@ const options: RoomOptions = { capacity: 4, createdTtlMs: 60_000, emptyGraceMs: 
 class FakePeer implements Peer {
   binding: Binding | undefined;
   events: SignalingEvent[] = [];
+  closedWith: number | undefined;
   emit<T extends EventType>(type: T, payload: EventPayload<T>): void {
     this.events.push({ type, payload } as SignalingEvent);
+  }
+  close(code: number): void {
+    this.closedWith = code;
   }
 }
 
@@ -125,8 +132,8 @@ describe('Room', () => {
     const room = new Room(randomUUID(), options, log, onClosed);
     const alice = new FakePeer();
     const bob = new FakePeer();
-    const a = room.join(alice, 'Alice');
-    const b = room.join(bob, 'Bob');
+    const a = room.join(alice, 'Alice', 'u-Alice');
+    const b = room.join(bob, 'Bob', 'u-Bob');
     expect(b.members.map((m) => m.displayName)).toEqual(['Alice', 'Bob']);
     expect(alice.events).toEqual([
       { type: 'participant.joined', payload: { roomSeq: 2, participant: b.members[1] } },
@@ -134,8 +141,8 @@ describe('Room', () => {
     expect(bob.events).toEqual([]);
     expect(room.remove(a.participantId, 1, 'left')).toBe(true);
     expect(room.remove(a.participantId, 1, 'left')).toBe(false); // idempotent
-    expect(room.remove(b.participantId, 99, 'disconnected')).toBe(false); // stale epoch
-    expect(room.remove(b.participantId, 1, 'disconnected')).toBe(true);
+    expect(room.remove(b.participantId, 99, 'timeout')).toBe(false); // stale epoch
+    expect(room.remove(b.participantId, 1, 'timeout')).toBe(true);
     expect(room.state).toBe('empty');
     vi.advanceTimersByTime(options.emptyGraceMs);
     return vi.waitFor(() => {
@@ -147,16 +154,18 @@ describe('Room', () => {
     const room = new Room(randomUUID(), options, log, () => {});
     const other = new Room(randomUUID(), options, log, () => {});
     const peer = new FakePeer();
-    const first = room.join(peer, 'Alice');
-    expect(room.join(peer, 'Alice').participantId).toBe(first.participantId);
-    expect(() => other.join(peer, 'Alice')).toThrow(expect.objectContaining({ code: 'CONFLICT' }));
+    const first = room.join(peer, 'Alice', 'u-Alice');
+    expect(room.join(peer, 'Alice', 'u-Alice').participantId).toBe(first.participantId);
+    expect(() => other.join(peer, 'Alice', 'u-Alice')).toThrow(
+      expect.objectContaining({ code: 'CONFLICT' }),
+    );
   });
 
   test('the room is full at capacity', () => {
     const room = new Room(randomUUID(), { ...options, capacity: 2 }, log, () => {});
-    room.join(new FakePeer(), 'A');
-    room.join(new FakePeer(), 'B');
-    expect(() => room.join(new FakePeer(), 'C')).toThrow(
+    room.join(new FakePeer(), 'A', 'u-A');
+    room.join(new FakePeer(), 'B', 'u-B');
+    expect(() => room.join(new FakePeer(), 'C', 'u-C')).toThrow(
       expect.objectContaining({ code: 'CAPACITY_EXCEEDED' }),
     );
   });
@@ -165,13 +174,19 @@ describe('Room', () => {
     const room = new Room(randomUUID(), options, log, () => {});
     const alice = new FakePeer();
     const bob = new FakePeer();
-    const a = room.join(alice, 'Alice');
-    room.join(bob, 'Bob');
+    const a = room.join(alice, 'Alice', 'u-Alice');
+    room.join(bob, 'Bob', 'u-Bob');
     alice.events = [];
     room.update(a.participantId, { audioMuted: true, videoMuted: false });
     const updated = {
       type: 'participant.updated',
-      payload: { roomSeq: 3, participantId: a.participantId, audioMuted: true, videoMuted: false },
+      payload: {
+        roomSeq: 3,
+        participantId: a.participantId,
+        audioMuted: true,
+        videoMuted: false,
+        connection: 'connected',
+      },
     };
     expect(alice.events).toEqual([updated]);
     expect(bob.events).toEqual([updated]);
@@ -184,8 +199,8 @@ describe('Room', () => {
     const room = new Room(randomUUID(), options, log, vi.fn(), 'sfu');
     const alice = new FakePeer();
     const bob = new FakePeer();
-    const a = room.join(alice, 'Alice');
-    const b = room.join(bob, 'Bob');
+    const a = room.join(alice, 'Alice', 'u-Alice');
+    const b = room.join(bob, 'Bob', 'u-Bob');
     room.setActiveSpeaker(b.participantId);
     const event = {
       type: 'sfu.activeSpeaker',
@@ -236,7 +251,7 @@ describe('Room invariants', () => {
           const binding = peer.binding;
           if (step.kind === 'join') {
             try {
-              const snap = room.join(peer, `p${step.client}`);
+              const snap = room.join(peer, `p${step.client}`, `u-${step.client}`);
               peer.events = [];
               views.set(peer, {
                 roomSeq: snap.roomSeq,
@@ -255,7 +270,7 @@ describe('Room invariants', () => {
           } else if (binding && step.kind === 'disconnect') {
             const epoch = step.stale ? binding.epoch - 1 : binding.epoch;
             const seqBefore = room.roomSeq;
-            const changed = room.remove(binding.participantId, epoch, 'disconnected');
+            const changed = room.remove(binding.participantId, epoch, 'timeout');
             expect(changed).toBe(!step.stale); // a stale close is a no-op…
             if (step.stale) expect(room.roomSeq).toBe(seqBefore); // …and emits nothing
             if (changed) views.delete(peer);

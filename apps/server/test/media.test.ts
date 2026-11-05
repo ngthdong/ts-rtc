@@ -150,27 +150,26 @@ test('a room that closes (empty grace over) closes its Router', async () => {
   await expect.poll(() => routerCounts(m)).toEqual([0, 0]);
 });
 
-test('a dead Worker closes only its rooms, members are told, and a replacement starts', async () => {
+test('a dead Worker: its rooms move to a new Router, members are told, a replacement starts', async () => {
   const m = await startMedia(21_070);
   const server = await serve({ media: m });
   const alice = await TestClient.greeted(server);
   const bob = await TestClient.greeted(server);
   const roomA = directory.create('sfu');
   const roomB = directory.create('sfu');
-  await alice.ok('room.join', { roomId: roomA }); // Worker 0
+  const a = await alice.ok<RoomSnapshot>('room.join', { roomId: roomA }); // Worker 0
   await bob.ok('room.join', { roomId: roomB }); // Worker 1
   const [first, second] = await m.inspect();
 
   kill(first?.pid);
-  expect(await alice.waitForEvent('room.closed')).toMatchObject({
-    payload: { reason: 'media_failure' },
-  });
-  expect(await alice.request('room.sync', {})).toMatchObject({
-    ok: false,
-    error: { code: 'INVALID_STATE' }, // no longer in a room
-  });
+  const reset = await alice.waitForEvent('sfu.mediaReset');
+  const synced = await alice.ok<RoomSnapshot>('room.sync', {}); // still a member
+  expect(synced).toMatchObject({ roomId: roomA, participantId: a.participantId });
+  expect(synced.routerId).not.toBe(a.routerId);
+  expect(reset.payload).toEqual({ routerRtpCapabilities: synced.routerRtpCapabilities });
+  expect(alice.events.some((e) => e.type === 'room.closed')).toBe(false);
   expect(await bob.ok<RoomSnapshot>('room.sync', {})).toMatchObject({ roomId: roomB });
-  expect(bob.events.some((e) => e.type === 'room.closed')).toBe(false);
+  expect(bob.events.some((e) => e.type === 'sfu.mediaReset')).toBe(false);
 
   const replaced = async () => {
     const worker = (await m.inspect()).find((w) => w.index === 0);
@@ -178,8 +177,35 @@ test('a dead Worker closes only its rooms, members are told, and a replacement s
   };
   await expect.poll(replaced).toBe(true);
   expect((await m.inspect())[1]?.pid).toBe(second?.pid); // the other Worker was untouched
-  expect(await routerCounts(m)).toEqual([0, 1]); // the replacement starts empty
+  expect(await routerCounts(m)).toEqual([0, 2]); // room A moved to the live Worker
   expect((await app?.http.inject('/readyz'))?.statusCode).toBe(200);
+});
+
+test('a dead Worker and no other: the room waits for the replacement Worker', async () => {
+  const m = await startMedia(21_075, { count: 1, restartDelayMs: 300 });
+  const server = await serve({ media: m });
+  const alice = await TestClient.greeted(server);
+  await alice.ok('room.join', { roomId: directory.create('sfu') });
+  const [worker] = await m.inspect();
+  kill(worker?.pid);
+  await alice.waitForEvent('sfu.mediaReset');
+  const [replacement] = await m.inspect();
+  expect(replacement?.pid).not.toBe(worker?.pid);
+  expect(replacement?.routerIds).toHaveLength(1);
+});
+
+test('a second media reset within a minute closes the room instead', async () => {
+  const m = await startMedia(21_085, { count: 2 });
+  const server = await serve({ media: m });
+  const alice = await TestClient.greeted(server);
+  await alice.ok('room.join', { roomId: directory.create('sfu') });
+  const host = async () => (await m.inspect()).find((w) => w.routerIds.length > 0)?.pid;
+  kill(await host());
+  await alice.waitForEvent('sfu.mediaReset');
+  kill(await host());
+  expect(await alice.waitForEvent('room.closed')).toMatchObject({
+    payload: { reason: 'media_failure' },
+  });
 });
 
 test('a crash loop (6 deaths in a minute) stops restarts and makes /readyz answer 503', async () => {

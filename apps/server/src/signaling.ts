@@ -6,16 +6,20 @@ import { WebSocketServer } from 'ws';
 import { closedDirectory, type Directory } from './auth/directory.js';
 import { RequestRouter } from './router.js';
 import { Session, type SessionOptions } from './session.js';
-import { leaveOnDisconnect, registerRoomHandlers, RoomRegistry } from './rooms/handlers.js';
+import {
+  leaveOnDisconnect,
+  registerRoomHandlers,
+  RoomRegistry,
+  type RegistryOptions,
+} from './rooms/handlers.js';
 import { registerReportHandlers } from './reports.js';
 import { registerSfuHandlers } from './rooms/sfu-handlers.js';
-import type { RoomOptions } from './rooms/room.js';
 import type { MediaController } from './media/media-controller.js';
 
 export const WS_PATH = '/ws';
 export const MAX_PAYLOAD_BYTES = 64 * 1024;
 
-export interface SignalingOptions extends SessionOptions, RoomOptions {
+export interface SignalingOptions extends SessionOptions, RegistryOptions {
   // Browser origins allowed to open a WebSocket. Requests without Origin are not browsers.
   allowedOrigins: readonly string[];
   requestTimeoutMs: number;
@@ -23,8 +27,6 @@ export interface SignalingOptions extends SessionOptions, RoomOptions {
   iceServersFor: (userKey: string) => IceServer[];
   /** Access tokens and durable rooms (Postgres). The default lets nobody in. */
   directory: Directory;
-  /** RoomOptions.capacity is for Mesh rooms; SFU rooms hold more. */
-  sfuCapacity: number;
   /** The SFU. Absent: Mesh rooms only. */
   media?: MediaController | undefined;
 }
@@ -39,6 +41,7 @@ export const defaultSignalingOptions: SignalingOptions = {
   sfuCapacity: 10,
   createdTtlMs: 10 * 60_000,
   emptyGraceMs: 60_000,
+  reconnectGraceMs: 30_000,
   iceServersFor: () => [],
   directory: closedDirectory,
 };
@@ -108,8 +111,8 @@ export function attachSignaling(
     }
     wss.handleUpgrade(req, socket, head, (ws) => {
       const session = new Session(ws, log, router, options);
-      session.onClose(() => {
-        leaveOnDisconnect(session, rooms);
+      session.onClose((code) => {
+        leaveOnDisconnect(session, rooms, code);
       });
     });
   });
@@ -137,6 +140,7 @@ export function attachSignaling(
           resolve();
         });
       });
+      rooms.dispose();
     },
   };
 }

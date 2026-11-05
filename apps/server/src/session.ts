@@ -30,7 +30,7 @@ export class Session implements Peer {
   user: User | undefined;
   binding: Binding | undefined;
   private seq = 0;
-  private readonly closeListeners: (() => void)[] = [];
+  private readonly closeListeners: ((code: number) => void)[] = [];
   private readonly responses = new Map<string, Promise<Outcome>>();
   private readonly timers: NodeJS.Timeout[] = [];
   private awaitingPong = false;
@@ -59,7 +59,7 @@ export class Session implements Peer {
     ws.on('close', (code) => {
       for (const timer of this.timers) clearTimeout(timer);
       this.log.info({ code }, 'ws.close');
-      for (const listener of this.closeListeners) listener();
+      for (const listener of this.closeListeners) listener(code);
     });
     ws.on('error', (err) => {
       this.log.warn({ err }, 'ws.error');
@@ -82,7 +82,8 @@ export class Session implements Peer {
     this.send({ v: PROTOCOL_VERSION, kind: 'evt', type, seq: ++this.seq, payload });
   }
 
-  onClose(listener: () => void): void {
+  /** With the close code: 1000 from the client means it left on purpose (tab closed). */
+  onClose(listener: (code: number) => void): void {
     this.closeListeners.push(listener);
   }
 

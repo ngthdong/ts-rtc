@@ -12,7 +12,9 @@ export type MediaAction =
   | 'sfu.consume'
   | 'sfu.resumeConsumer'
   | 'sfu.closeProducer'
-  | 'sfu.pauseProducer';
+  | 'sfu.pauseProducer'
+  | 'sfu.restartIce'
+  | 'sfu.closeTransports';
 export type Action = RoomAction | MediaAction;
 
 /** What a room action is decided on: the durable room and the actor's membership. */

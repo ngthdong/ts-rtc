@@ -1,9 +1,12 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import {
+  CloseCode,
   MeshSignal,
   SignalingError,
   type EventPayload,
+  type ConnectionState,
   type EventType,
+  type JoinResult,
   type LeaveReason,
   type Member,
   type MuteState,
@@ -18,6 +21,8 @@ import { SerialExecutor } from './executor.js';
 export interface Peer {
   binding: Binding | undefined;
   emit<T extends EventType>(type: T, payload: EventPayload<T>): void;
+  /** A resume from another connection replaces this one. */
+  close(code: number, reason: string): void;
 }
 
 /** A session's membership. `epoch` lets a stale disconnect be told apart from a current one. */
@@ -29,10 +34,24 @@ export interface Binding {
 
 interface Participant extends MuteState {
   id: string;
+  /** The account: only the same user may resume this participant. */
+  userId: string;
   displayName: string;
+  /** +1 on every resume: a close or a grace timer from an earlier connection is stale. */
   epoch: number;
   peer: Peer;
+  connection: ConnectionState;
+  /** SHA-256 of the current resume secret; the secret itself is never stored. */
+  resumeHash: Buffer;
+  /**
+   * Mesh signals that arrived while reconnecting, delivered on resume. Room state is resent as
+   * a snapshot, but a lost offer cannot be recomputed: the call to that peer would never start.
+   */
+  heldSignals: { from: string; signal: MeshSignal }[];
 }
+
+/** Enough for an offer and its candidates from a few peers; the rest is dropped. */
+const MAX_HELD_SIGNALS = 100;
 
 export interface RoomOptions {
   capacity: number;
@@ -59,6 +78,9 @@ export class Room {
   roomSeq = 0;
   /** SFU rooms: set once the room's Router exists (by the join handler, in the executor). */
   routerRtpCapabilities: RtpCapabilities | undefined;
+  routerId: string | undefined;
+  /** When the room's media was reset (its Worker died), within the last minute. */
+  mediaResets: number[] = [];
   activeSpeaker: string | undefined;
   private readonly participants = new Map<string, Participant>();
   private readonly log: FastifyBaseLogger;
@@ -80,8 +102,8 @@ export class Room {
     return [...this.participants.values()].map(toMember);
   }
 
-  join(peer: Peer, displayName: string): RoomSnapshot {
-    if (peer.binding?.room === this) return this.snapshot(peer.binding.participantId);
+  join(peer: Peer, displayName: string, userId: string): JoinResult {
+    if (peer.binding?.room === this) return this.withToken(peer.binding.participantId);
     if (peer.binding) throw new SignalingError('CONFLICT', 'already in another room');
     if (this.state === 'closed') throw new SignalingError('NOT_FOUND', 'room not found');
     if (this.participants.size >= this.options.capacity) {
@@ -89,9 +111,13 @@ export class Room {
     }
     const participant: Participant = {
       id: randomUUID(),
+      userId,
       displayName,
       epoch: 1,
       peer,
+      connection: 'connected',
+      resumeHash: Buffer.alloc(0),
+      heldSignals: [],
       audioMuted: false,
       videoMuted: false,
     };
@@ -106,7 +132,56 @@ export class Room {
       { roomSeq, participant: toMember(participant) },
       participant.id,
     );
-    return this.snapshot(participant.id);
+    return this.withToken(participant.id);
+  }
+
+  /**
+   * The member's socket closed: it stays (and keeps its media) while it may resume. False when
+   * `epoch` is stale (already resumed elsewhere) or it is already reconnecting.
+   */
+  markReconnecting(participantId: string, epoch: number): boolean {
+    const participant = this.participants.get(participantId);
+    if (participant?.epoch !== epoch || participant.connection === 'reconnecting') return false;
+    participant.connection = 'reconnecting';
+    if (participant.peer.binding?.participantId === participantId)
+      participant.peer.binding = undefined;
+    this.broadcastState(participant); // participant.updated {connection:'reconnecting'}
+    return true;
+  }
+
+  /**
+   * Binds `peer` to an existing participant: same user, current secret. A connection still
+   * bound to it (half-open, or another tab) is told and closed with 4409.
+   */
+  resume(peer: Peer, participantId: string, secret: string, userId: string): JoinResult {
+    const participant = this.participants.get(participantId);
+    const given = createHash('sha256').update(secret).digest();
+    if (
+      !participant ||
+      participant.userId !== userId ||
+      !timingSafeEqual(given, participant.resumeHash)
+    ) {
+      throw new SignalingError('NOT_FOUND', 'session expired: join the room again');
+    }
+    if (peer.binding && peer.binding.participantId !== participantId) {
+      throw new SignalingError('CONFLICT', 'already in a room');
+    }
+    const old = participant.peer;
+    if (old !== peer && old.binding?.participantId === participantId) {
+      old.binding = undefined;
+      old.emit('session.replaced', {});
+      old.close(CloseCode.Replaced, 'resumed by another connection'); // 4409
+    }
+    participant.epoch += 1;
+    participant.peer = peer;
+    peer.binding = { room: this, participantId, epoch: participant.epoch };
+    this.log.info({ participantId, epoch: participant.epoch }, 'session.bound');
+    if (participant.connection === 'reconnecting') {
+      participant.connection = 'connected';
+      this.broadcastState(participant);
+    }
+    for (const held of participant.heldSignals.splice(0)) peer.emit('mesh.signal', held);
+    return this.withToken(participantId); // `<room>.<participant>.<256-bit secret>`, hash stored
   }
 
   remove(participantId: string, epoch: number, reason: LeaveReason): boolean {
@@ -135,8 +210,7 @@ export class Room {
     }
     participant.audioMuted = state.audioMuted;
     participant.videoMuted = state.videoMuted;
-    const roomSeq = ++this.roomSeq;
-    this.broadcast('participant.updated', { roomSeq, participantId, ...state });
+    this.broadcastState(participant);
   }
 
   /** The speaker highlight is room state: ordered by roomSeq like membership. */
@@ -176,14 +250,17 @@ export class Room {
     if (!target || to === from) {
       throw new SignalingError('NOT_FOUND', 'no such participant in this room');
     }
-    target.peer.emit('mesh.signal', { from, signal });
+    if (target.connection === 'connected') target.peer.emit('mesh.signal', { from, signal });
+    else if (target.heldSignals.length < MAX_HELD_SIGNALS)
+      target.heldSignals.push({ from, signal });
   }
 
   snapshot(participantId: string): RoomSnapshot {
     if (!this.participants.has(participantId)) {
       throw new SignalingError('INVALID_STATE', 'not a member of this room');
     }
-    const { id: roomId, roomSeq, mode, members, routerRtpCapabilities, activeSpeaker } = this;
+    const { id: roomId, roomSeq, mode, members, routerRtpCapabilities, routerId } = this;
+    const { activeSpeaker } = this;
     return {
       roomId,
       participantId,
@@ -191,6 +268,7 @@ export class Room {
       mode,
       members,
       ...(routerRtpCapabilities && { routerRtpCapabilities }),
+      ...(routerId && { routerId }),
       ...(activeSpeaker && this.participants.has(activeSpeaker) && { activeSpeaker }),
     };
   }
@@ -199,6 +277,31 @@ export class Room {
     for (const participant of this.participants.values()) {
       if (participant.id !== except) participant.peer.emit(type, payload);
     }
+  }
+
+  /** Mute and connection state are room state: one event, ordered by roomSeq, to everyone. */
+  private broadcastState(participant: Participant): void {
+    const { id: participantId, audioMuted, videoMuted, connection } = participant;
+    const roomSeq = ++this.roomSeq;
+    this.broadcast('participant.updated', {
+      roomSeq,
+      participantId,
+      audioMuted,
+      videoMuted,
+      connection,
+    });
+  }
+
+  /** The snapshot plus a fresh resume token; only the token's hash is kept. */
+  private withToken(participantId: string): JoinResult {
+    const participant = this.participants.get(participantId);
+    if (!participant) throw new SignalingError('INVALID_STATE', 'not a member of this room');
+    const secret = randomBytes(32).toString('base64url');
+    participant.resumeHash = createHash('sha256').update(secret).digest();
+    return {
+      ...this.snapshot(participantId),
+      resumeToken: `${this.id}.${participantId}.${secret}`,
+    };
   }
 
   private transition(to: RoomState): void {
@@ -223,6 +326,6 @@ export class Room {
   }
 }
 
-function toMember({ id, displayName, audioMuted, videoMuted }: Participant): Member {
-  return { participantId: id, displayName, audioMuted, videoMuted };
+function toMember({ id, displayName, connection, audioMuted, videoMuted }: Participant): Member {
+  return { participantId: id, displayName, connection, audioMuted, videoMuted };
 }
