@@ -61,6 +61,13 @@ export const SfuRequests = {
     request: z.object({ producerId: Id, paused: z.boolean() }),
     response: z.object({}),
   },
+  /** ICE stuck: new ICE parameters for one of your transports, for transport.restartIce(). */
+  'sfu.restartIce': {
+    request: z.object({ transportId: Id }),
+    response: z.object({ iceParameters: Opaque }),
+  },
+  /** Recovery: closes all your transports (and Producers, Consumers) so you can start over. */
+  'sfu.closeTransports': { request: z.object({}), response: z.object({}) },
 } as const;
 
 export const SfuEvents = {
@@ -73,6 +80,17 @@ export const SfuEvents = {
   /** The server closed one of your transports: never connected, DTLS failed, ICE gone 30 s. */
   'sfu.transportClosed': z.object({
     transportId: Id,
-    reason: z.enum(['connect_timeout', 'dtls_failed', 'dtls_closed', 'ice_disconnected']),
+    reason: z.enum([
+      'connect_timeout',
+      'dtls_failed',
+      'dtls_closed',
+      'ice_disconnected',
+      'closed_by_server', // an operator (or the dev route the E2E tests use)
+    ]),
   }),
+  /**
+   * The room's Worker died and a new Router replaced it: every transport, Producer and
+   * Consumer is gone. Build the media again (room.sync has everyone's new Producers).
+   */
+  'sfu.mediaReset': z.object({ routerRtpCapabilities: Opaque }),
 } as const;
