@@ -17,6 +17,7 @@
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "@vitejs/plugin-react": "^6",
+    "fast-check": "^4.10.2",
     "vite": "^8"
   }
 }
